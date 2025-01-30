@@ -27,7 +27,7 @@ jobs:
 
 
       - name: Pull Request
-        uses: catenaclearing/catena-actions/composite/open-pull-request@v0
+        uses: catenaclearing/catena-actions/composite/open-pull-request@0
         with:
           github_token: ${{ github.token }}
           title: ${{ github.ref_name }}
