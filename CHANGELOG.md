@@ -1,3 +1,10 @@
+## 0.2.1 (2025-01-30)
+
+### Fix
+
+- wrong tag prefix when referencing acitons
+- use correct tags when referencing packages
+
 ## 0.2.0 (2025-01-30)
 
 ### Create Pull request and Release Actions
