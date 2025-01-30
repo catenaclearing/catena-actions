@@ -29,7 +29,6 @@ runs:
         else
           PR_TITLE="${{ inputs.title }}"
         fi
-
         gh pr create \
           --title "$PR_TITLE" \
           --body-file "./actions/open-pull-request/templates/${{ inputs.template-file }}" \
