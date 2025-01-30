@@ -7,6 +7,11 @@ inputs:
     description: Github Catena Machine User Personal Access Token (PAT)
     required: true
 
+  branch:
+    description: Branch to bump and release
+    required: false
+    default: main
+
 runs:
   using: "composite"
   steps:
@@ -17,7 +22,7 @@ runs:
       if: always()
       with:
         access_token: ${{ secrets.MACHINE_USER_PAT }}
-        branch: main
+        branch: ${{ inputs.branch }}
         enforce_admins: false
 
     - name: Bump Version and Release
@@ -30,5 +35,5 @@ runs:
       if: always()
       with:
         access_token: ${{ secrets.MACHINE_USER_PAT }}
-        branch: main
+        branch: ${{ inputs.branch }}
         enforce_admins: true
