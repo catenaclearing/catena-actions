@@ -12,10 +12,6 @@ inputs:
     required: true
     default: WWHTDA.md
 
-  github-token:
-    description: GitHub Token
-    required: true
-
 runs:
   using: "composite"
   steps:
@@ -25,7 +21,7 @@ runs:
       shell: bash
       continue-on-error: true
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         gh pr create \
           --title "${{ inputs.title }}"  \
