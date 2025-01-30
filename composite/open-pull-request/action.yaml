@@ -7,7 +7,7 @@ inputs:
     description: Pull Request Title
     required: false
 
-  template-file:
+  template_file:
     description: Name of the pull request template file
     required: true
     default: WWHTDA.md
@@ -32,6 +32,6 @@ runs:
 
         gh pr create \
           --title "$PR_TITLE" \
-          --body-file "./composite/open-pull-request/templates/${{ inputs.template-file }}" \
+          --body-file "./composite/open-pull-request/templates/${{ inputs.template_file }}" \
           --base main \
           --draft
