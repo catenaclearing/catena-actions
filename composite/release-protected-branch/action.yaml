@@ -10,7 +10,6 @@ inputs:
   branch:
     description: Branch to bump and release
     required: false
-    default: main
 
 runs:
   using: "composite"
