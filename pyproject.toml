@@ -1,0 +1,150 @@
+[tool.poetry]
+authors = ["Andre Sionek <andre.sionek@catenaclearing.io>"]
+keywords = ['github', 'actions', 'cicd', 'pipeline', 'github actions']
+readme = "README.md"
+homepage = "https://catenaclearing.io"
+name = "Catena Cations"
+version = "0.2.1"
+package-mode = false
+
+[tool.poetry.build]
+generate-setup-file = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.lint.dependencies]
+black = "^24.4.2"                                 # Python style checks
+commitizen = "^3.12.0"                            # Check commit messages
+pre-commit = "^3.7.1"                             # Runs a pipeline before commiting code
+yamllint = "^1.35.1"                              # Linter for YAML files
+ruff = "^0.4.4"                                   # Python linter
+
+
+[build-system]
+build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core>=1.5.0"]
+
+
+[tool.black]
+extend-exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.venv
+  | \.env
+  | cdk.out
+  | \.vscode
+  | build
+  | dist
+  | \.mypy_cache
+)\
+'''
+include = '\.pyi?$'
+line-length = 135
+target-version = ['py311']
+
+[tool.ruff]
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pyenv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "build",
+    "dist",
+    "site-packages",
+    "venv",
+    "**/cdk.out",
+]
+
+# Same as Black.
+line-length = 135
+indent-width = 4
+
+# Assume Python 3.11
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  # Choose the flake8 errors to ignore globally here
+  "E501", # Line too long  (using B950 instead, which has 10% tolerance)
+  "D107", # Missing docstring in __init__
+  "D202", # No blank lines allowed after function docstring
+  "D203", # No blank lines allowed before class docstring
+  "D213", # Multi-line docstring summary should start at the second line
+  "D400", # First line should end with a period
+  "D415", # First line should end with a period, question mark, or exclamation point
+  "D100", # Missing docstring in public module
+  "D104", # Missing docstring in public package
+  "ANN003", # Missing type annotation for **kwargs
+  "ANN002", # Missing type annotation for **args
+  "ANN101", # Missing type annotation for self in method
+  "ANN1", # Missing type annotation for self in methot or cls method
+  "ANN401", # Dynamically typed expressions (typing.Any) are disallowed
+  "A002", # Argument `id` is shadowing a Python builtin
+  "F821", # Undefined name
+  "FIX002", # Line contains TODO, consider resolving the issue
+]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"*/__init__.py" = ["F401"]
+"**/tests/**" = [
+  "ANN", # Annotations
+  "D", # Docstrings
+  "INP001", #  File is part of an implicit namespace package. Add an `__init__.py`.
+  "S101", # Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+  "PLR2004", # Magic value used in comparison, consider replacing with a constant variable
+  "S105", # Possible hardcoded password
+  "S106", # Possible hardcoded password
+]
+
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-single-line = false
+lines-after-imports = 2
+lines-between-types = 0
+
+
+[tool.pytest.ini_options]
+addopts = """
+  -vv
+  --cov
+  --color=yes
+  --cov-report term
+  --cov-report xml
+"""
+minversion = "7.1"
+
+[tool.coverage.run]
+omit = ["*/tests/*", "*/__init__.py", "*/*config.py"]    # Remove test files from coverage run.
+
+[tool.commitizen]
+tag_format = "$version"
+version = "0.2.1"
+version_files = [
+  "pyproject.toml:version",
+]

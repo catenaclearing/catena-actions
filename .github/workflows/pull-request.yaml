@@ -1,0 +1,19 @@
+---
+name: Open Pull Request
+
+on: create
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  draft-pull-request:
+    name: Draft Pull Request
+    runs-on: ubuntu-latest
+    if: ${{ github.ref_type == 'branch' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull Request
+        uses: catenaclearing/catena-actions/composite/open-pull-request@main

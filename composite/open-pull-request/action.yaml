@@ -1,0 +1,37 @@
+---
+name: Open Pull Request
+description: Open a Pull Request from a feature branch to the main branch
+
+inputs:
+  title:
+    description: Pull Request Title
+    required: false
+
+  template_file:
+    description: Name of the pull request template file
+    required: true
+    default: WWHTDA.md
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Create Pull Request
+      shell: bash
+      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        # Fallback to github.ref_name if inputs.title is empty
+        if [ -z "${{ inputs.title }}" ]; then
+          PR_TITLE="${{ github.ref_name }}"
+        else
+          PR_TITLE="${{ inputs.title }}"
+        fi
+
+        gh pr create \
+          --title "$PR_TITLE" \
+          --body-file "./composite/open-pull-request/templates/${{ inputs.template_file }}" \
+          --base main \
+          --draft
