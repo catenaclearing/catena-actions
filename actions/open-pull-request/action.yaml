@@ -5,7 +5,7 @@ description: Open a Pull Request from a feature branch to the main branch
 inputs:
   title:
     description: Pull Request Title
-    required: true
+    required: false
 
   template-file:
     description: Name of the pull request template file
@@ -23,8 +23,15 @@ runs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
+        # Fallback to github.ref_name if inputs.title is empty
+        if [ -z "${{ inputs.title }}" ]; then
+          PR_TITLE="${{ github.ref_name }}"
+        else
+          PR_TITLE="${{ inputs.title }}"
+        fi
+
         gh pr create \
-          --title "${{ inputs.title }}"  \
+          --title "$PR_TITLE" \
           --body-file "./actions/open-pull-request/templates/${{ inputs.template-file }}" \
           --base main \
           --draft
