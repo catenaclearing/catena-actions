@@ -32,6 +32,6 @@ runs:
 
         gh pr create \
           --title "$PR_TITLE" \
-          --body-file "./actions/open-pull-request/templates/${{ inputs.template-file }}" \
+          --body-file "./composite/open-pull-request/templates/${{ inputs.template-file }}" \
           --base main \
           --draft
