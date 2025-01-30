@@ -18,5 +18,4 @@ jobs:
       - name: Pull Request
         uses: catenaclearing/catena-actions/actions/open-pull-request@main
         with:
-          github_token: ${{ github.token }}
           title: ${{ github.ref_name }}
