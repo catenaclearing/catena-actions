@@ -4,7 +4,7 @@ keywords = ['github', 'actions', 'cicd', 'pipeline', 'github actions']
 readme = "README.md"
 homepage = "https://catenaclearing.io"
 name = "Catena Cations"
-version = "0.1.0"
+version = "0.2.0"
 package-mode = false
 
 [tool.poetry.build]
@@ -144,7 +144,7 @@ omit = ["*/tests/*", "*/__init__.py", "*/*config.py"]    # Remove test files fro
 
 [tool.commitizen]
 tag_format = "$version"
-version = "0.1.0"
+version = "0.2.0"
 version_files = [
   "pyproject.toml:version",
 ]
