@@ -1,0 +1,34 @@
+---
+name: Bump and Release to Protected Branch
+description: Disable branch protection, bump and release a new version, then re-enable branch protection.
+
+inputs:
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Temporarily disable "include administrators" branch protection
+      uses: benjefferies/branch-protection-bot@v1
+      if: always()
+      with:
+        access_token: ${{ secrets.MACHINE_USER_PAT }}
+        branch: main
+        enforce_admins: false
+
+    - name: Bump Version and Release
+      uses: catenaclearing/catena-actions/actions/release@main
+      with:
+        machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
+
+    - name: Enable "include administrators" branch protection
+      uses: benjefferies/branch-protection-bot@v1
+      if: always()
+      with:
+        access_token: ${{ secrets.MACHINE_USER_PAT }}
+        branch: main
+        enforce_admins: true

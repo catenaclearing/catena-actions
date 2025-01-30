@@ -16,4 +16,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Pull Request
-        uses: catenaclearing/catena-actions/actions/open-pull-request@main
+        uses: catenaclearing/catena-actions/composite/open-pull-request@main
