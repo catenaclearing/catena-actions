@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Bump Version and Release to Protected Branch
-      uses: catenaclearing/catena-actions/composite/release-protected-branch@main
+      uses: catenaclearing/catena-actions/composite/release-protected-branch@v0
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```
