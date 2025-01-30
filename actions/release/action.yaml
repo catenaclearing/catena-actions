@@ -1,0 +1,12 @@
+---
+name: Bump Version
+description: Bump a Python project version using Commitizen and release a new version in GitHub.
+
+inputs:
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
+runs:
+  using: docker
+  image: Dockerfile
