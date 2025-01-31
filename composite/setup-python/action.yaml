@@ -29,7 +29,8 @@ runs:
 
     - name: Configure git PAT to access our private repositories
       shell: bash
-      run: git config --global url.https://${{ inputs.machine_user_pat }}@github.com/.insteadOf https://github.com/
+      run: |
+        git config --global url.https://${{ inputs.machine_user_pat }}@github.com/.insteadOf https://github.com/
 
     - name: Install Poetry
       shell: bash
@@ -50,3 +51,8 @@ runs:
       with:
         python-version: ${{ inputs.python_version }}
         cache: poetry
+
+    - name: Install Dependencies
+      shell: bash
+      run: |
+        poetry install --all-groups
