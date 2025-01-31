@@ -4,7 +4,7 @@ This composite action installs and configures Poetry, then installs Python.
 
 ## Usage
 
-Example Workflow using:
+Example Workflow:
 
 ```yaml
 ---
