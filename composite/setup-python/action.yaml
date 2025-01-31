@@ -1,6 +1,6 @@
 ---
 name: Set Up Python Environment
-description: Install Python packages and dependencies
+description: Install Python and Poetry for Python projects
 
 inputs:
   python_version:
