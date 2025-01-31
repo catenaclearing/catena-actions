@@ -12,6 +12,8 @@ generate-setup-file = false
 
 [tool.poetry.dependencies]
 python = "^3.11"
+aws-cdk-lib = "^2.177.0"
+catena-cdk-package = {git = "https://github.com/catenaclearing/catena-cdk-package", rev = "0"}
 
 [tool.poetry.group.lint]
 optional = true
