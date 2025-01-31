@@ -7,7 +7,14 @@ app = cdk.App()
 # Create an empty stack to validate the deploy action
 cdk.Stack(
     scope=app,
-    id="Actions-Development",
+    id="DummyActions-Development",
+    env=Envs.development,
+)
+
+# Create an empty stack to validate the deploy action
+cdk.Stack(
+    scope=app,
+    id="DummyActionsStaticSite-Development",
     env=Envs.development,
 )
 

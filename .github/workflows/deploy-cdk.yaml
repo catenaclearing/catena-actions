@@ -34,4 +34,4 @@ jobs:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
           role_to_assume: ${{ vars.ROLE_TO_ASSUME }}
           aws_region: ${{ vars.AWS_REGION }}
-          stack_name: Actions-Development
+          stack_name: DummyActions-Development
