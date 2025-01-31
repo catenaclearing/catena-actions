@@ -27,4 +27,6 @@ jobs:
 
       - name: Build Node project
         uses: catenaclearing/catena-actions/composite/build-node@0
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```

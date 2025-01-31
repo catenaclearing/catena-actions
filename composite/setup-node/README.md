@@ -27,4 +27,6 @@ jobs:
 
       - name: Setup Node environment
         uses: catenaclearing/catena-actions/composite/setup-node@0
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```
