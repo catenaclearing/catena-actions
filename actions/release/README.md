@@ -4,7 +4,7 @@ Bump a Python project version using Commitizen and release a new version in GitH
 
 ## Usage
 
-Example Workflow using:
+Example Workflow:
 
 ```yaml
 name: Release Package

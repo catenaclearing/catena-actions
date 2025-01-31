@@ -4,7 +4,7 @@ This composite action installs and configures Node.js.
 
 ## Usage
 
-Example Workflow using:
+Example Workflow:
 
 ```yaml
 ---

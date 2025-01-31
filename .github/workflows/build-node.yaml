@@ -1,5 +1,5 @@
 ---
-name: Setup Node
+name: Build Node
 
 on:
   push:
@@ -11,12 +11,12 @@ permissions:
 
 jobs:
   setup:
-    name: Setup Node
+    name: Build Node
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node environment
-        uses: catenaclearing/catena-actions/composite/setup-node@main
+      - name: Build Node project
+        uses: catenaclearing/catena-actions/composite/build-node@main
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}

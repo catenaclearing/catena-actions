@@ -1,0 +1,20 @@
+---
+name: NPM Build
+description: Set up Node environment and build a Node.js project
+
+inputs:
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set Up Environment and load Cached Dependencies
+      uses: catenaclearing/catena-actions/composite/setup-node@0
+      with:
+        machine_user_pat: ${{ inputs.machine_user_pat }}
+
+    - name: Build
+      shell: bash
+      run: npm run build

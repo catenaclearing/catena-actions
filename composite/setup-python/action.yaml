@@ -11,11 +11,26 @@ inputs:
   poetry_version:
     description: Poetry version
     required: false
-    default: 2.0.1
+    default: '2.0.1'
+
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
 
 runs:
   using: composite
   steps:
+    - name: Log in to the GitHub Container registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.machine_user_pat }}
+
+    - name: Configure git PAT to access our private repositories
+      shell: bash
+      run: git config --global url.https://${{ inputs.machine_user_pat }}@github.com/.insteadOf https://github.com/
+
     - name: Install Poetry
       shell: bash
       run: |
