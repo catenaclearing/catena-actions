@@ -50,6 +50,12 @@
 - Add composite actions to release package to protected branch
 - Add action to bump version and release package
 
+## v0.7.1 (2025-01-31)
+
+### Fix
+
+- version prefix
+
 ## v0.7.0 (2025-01-31)
 
 ### Feat
