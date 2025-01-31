@@ -55,10 +55,6 @@ echo "New tag: ${NEW_TAG}"
 
 # Compare old and new tags, update if necessary
 if [[ "${TAG}" != "${NEW_TAG}" ]]; then
-  echo "Updating latest tag..."
-  git tag -f latest
-  git push origin latest --force
-
   MAJOR_VERSION=v$(echo "${NEW_TAG}" | grep -oE '^[0-9]+')
   echo "Creating or updating major version tag: ${MAJOR_VERSION}"
   git tag -f "${MAJOR_VERSION}"
