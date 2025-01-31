@@ -4,7 +4,7 @@ keywords = ['github', 'actions', 'cicd', 'pipeline', 'github actions']
 readme = "README.md"
 homepage = "https://catenaclearing.io"
 name = "Catena Cations"
-version = "0.5.1"
+version = "v0.1.0"
 package-mode = false
 
 [tool.poetry.build]
@@ -12,16 +12,18 @@ generate-setup-file = false
 
 [tool.poetry.dependencies]
 python = "^3.11"
+aws-cdk-lib = "^2.177.0"
+catena-cdk-package = {git = "https://github.com/catenaclearing/catena-cdk-package", rev = "0"}
 
 [tool.poetry.group.lint]
 optional = true
 
 [tool.poetry.group.lint.dependencies]
 black = "^24.4.2"                                 # Python style checks
-commitizen = "^3.12.0"                            # Check commit messages
-pre-commit = "^3.7.1"                             # Runs a pipeline before commiting code
+commitizen = "^4.1.1"                            # Check commit messages
+pre-commit = "^4.1.0"                             # Runs a pipeline before commiting code
 yamllint = "^1.35.1"                              # Linter for YAML files
-ruff = "^0.4.4"                                   # Python linter
+ruff = "^0.9.4"                                   # Python linter
 
 
 [build-system]
@@ -143,8 +145,8 @@ minversion = "7.1"
 omit = ["*/tests/*", "*/__init__.py", "*/*config.py"]    # Remove test files from coverage run.
 
 [tool.commitizen]
-tag_format = "$version"
-version = "0.5.1"
+tag_format = "v$version"
+version = "v0.1.0"
 version_files = [
   "pyproject.toml:version",
 ]

@@ -26,5 +26,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Node environment
-        uses: catenaclearing/catena-actions/composite/setup-node@0
+        uses: catenaclearing/catena-actions/composite/setup-node@v0
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```

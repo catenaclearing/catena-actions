@@ -1,0 +1,55 @@
+---
+name: Deploy CDK Stack
+description: Install AWS CDK, the project dependencies and deploy the CDK stack.
+
+inputs:
+  role_to_assume:
+    description: Role ARN to be assumed
+    required: true
+
+  aws_region:
+    description: AWS region to deploy
+    required: true
+
+  stack_name:
+    description: Name of the stack to deploy
+    required: true
+
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
+  cdk_version:
+    description: AWS CDK version
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Set Up Environment and load Cached Dependencies
+      uses: catenaclearing/catena-actions/composite/setup-python@v0
+      with:
+        machine_user_pat: ${{ inputs.machine_user_pat }}
+
+    - name: Install AWS CDK
+      shell: bash
+      run: npm install -g aws-cdk@${{ inputs.cdk_version }}
+
+    - name: Install Python dependencies
+      shell: bash
+      run: poetry install
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role_to_assume }}
+        role-session-name: ${{ github.event.repository.name }}-${{ github.actor }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: CDK Deploy
+      shell: bash
+      run: poetry run cdk deploy ${{ inputs.stack_name }} --force
+      env:
+        GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
+        DOCKER_BUILDKIT: 1
