@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy CDK Stack
-        uses: catenaclearing/catena-actions/composite/deploy-cdk@0
+        uses: catenaclearing/catena-actions/composite/deploy-cdk@v0
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
           role_to_assume: ${{ vars.ROLE_TO_ASSUME }}
