@@ -1,3 +1,9 @@
+## 0.3.0 (2025-01-31)
+
+### Feat
+
+- action to setup python environment
+
 ## 0.2.1 (2025-01-30)
 
 ### Fix

@@ -1,0 +1,37 @@
+---
+name: Set Up Python Environment
+description: Install Python packages and dependencies
+
+inputs:
+  python_version:
+    description: Python version
+    required: false
+    default: '3.13'
+
+  poetry_version:
+    description: Poetry version
+    required: false
+    default: 2.0.1
+
+runs:
+  using: composite
+  steps:
+    - name: Install Poetry
+      shell: bash
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 - --version ${{ inputs.poetry_version }}
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Configure Poetry
+      shell: bash
+      run: |
+        poetry config virtualenvs.create true
+        poetry config virtualenvs.in-project true
+        poetry config virtualenvs.path .venv
+        poetry config cache-dir ~/.poetry/cache
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+        cache: poetry
