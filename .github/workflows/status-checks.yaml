@@ -4,10 +4,17 @@ name: Status Checks
 on:
   push:
     branches:
-      - "*"
+      - main
+  pull_request:
+    types:
+      - labeled
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   lint:
@@ -39,5 +46,12 @@ jobs:
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: SonarQube Quality Gate check
+        id: sonarqube-quality-gate-check
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
