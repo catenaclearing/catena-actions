@@ -1,3 +1,9 @@
+## 0.5.0 (2025-01-31)
+
+### Feat
+
+- create action to build node project
+
 ## 0.4.1 (2025-01-31)
 
 ### Fix
