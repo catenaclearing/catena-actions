@@ -1,0 +1,30 @@
+---
+name: Status Checks
+
+on:
+  push:
+    branches:
+      - "*"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    concurrency:
+      group: lint-${{ github.workflow }}-${{ github.actor }}-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Up Environment and load Cached Dependencies
+        uses: catenaclearing/catena-actions/composite/setup-python@main
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
+
+      - name: Lint
+        shell: bash
+        run: |
+          poetry run pre-commit run --all-files

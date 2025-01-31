@@ -34,11 +34,8 @@ runs:
 
     - name: Install AWS CDK
       shell: bash
-      run: npm install -g aws-cdk@${{ inputs.cdk_version }}
-
-    - name: Install Python dependencies
-      shell: bash
-      run: poetry install
+      run: |
+        npm install -g aws-cdk@${{ inputs.cdk_version }}
 
     - name: Build Node project
       uses: catenaclearing/catena-actions/composite/build-node@v0
@@ -54,7 +51,8 @@ runs:
 
     - name: CDK Deploy
       shell: bash
-      run: poetry run cdk deploy ${{ inputs.stack_name }} --force
+      run: |
+        poetry run cdk deploy ${{ inputs.stack_name }} --force
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
