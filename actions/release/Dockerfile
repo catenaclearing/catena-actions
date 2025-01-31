@@ -6,13 +6,12 @@ ENV GHTOKEN_VERSION=v2.0.2
 # Install Github Cli
 RUN apt-get update -y \
     && apt-get install -y --no-install-recommends \
+    ca-certificates \
     curl \
     gh \
     git \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir "commitizen>=3.12.0,<4.0.0"
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir "commitizen>=3.12.0,<4.0.0"
 
 COPY entrypoint.sh /entrypoint.sh
 
