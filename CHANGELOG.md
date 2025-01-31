@@ -1,3 +1,11 @@
+## v0.2.1 (2025-01-31)
+
+### Fix
+
+- deploy action
+- deploy action
+- deploy action
+
 ## v0.2.0 (2025-01-31)
 
 ### Feat
