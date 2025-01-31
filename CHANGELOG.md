@@ -1,3 +1,15 @@
+## v0.3.0 (2025-01-31)
+
+### Feat
+
+- add sonar
+
+### Fix
+
+- python version
+- python version
+- sonarqube issues
+
 ## v0.2.1 (2025-01-31)
 
 ### Fix
