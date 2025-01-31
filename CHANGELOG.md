@@ -1,3 +1,15 @@
+## 0.4.1 (2025-01-31)
+
+### Fix
+
+- add package.json and package-lock.json to allow testing the action
+
+## 0.4.0 (2025-01-31)
+
+### Feat
+
+- action to setup node environment
+
 ## 0.3.0 (2025-01-31)
 
 ### Feat
