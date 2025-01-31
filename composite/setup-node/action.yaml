@@ -1,0 +1,30 @@
+---
+name: Set Up Node Environment
+description: Install dependencies for Node.js projects
+
+inputs:
+  node_version:
+    description: Node version
+    required: false
+    default: '22'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Node.js
+      id: install-node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Cache node modules
+      id: cache-npm
+      uses: actions/cache@v4
+      with:
+        path: node_modules
+        key: node-modules-${{ hashFiles('package-lock.json') }}
+
+    - name: Install Dependencies
+      if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: npm install
