@@ -145,7 +145,7 @@ minversion = "7.1"
 omit = ["*/tests/*", "*/__init__.py", "*/*config.py"]    # Remove test files from coverage run.
 
 [tool.commitizen]
-tag_format = "$version"
+tag_format = "v$version"
 version = "0.6.0"
 version_files = [
   "pyproject.toml:version",

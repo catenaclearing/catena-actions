@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy CDK Static Site
-        uses: catenaclearing/catena-actions/composite/deploy-cdk-static-site@0
+        uses: catenaclearing/catena-actions/composite/deploy-cdk-static-site@v0
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
           role_to_assume: ${{ vars.ROLE_TO_ASSUME }}

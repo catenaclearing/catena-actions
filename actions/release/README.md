@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Bump Version and Release
-        uses: catenaclearing/catena-actions/actions/release@0
+        uses: catenaclearing/catena-actions/actions/release@v0
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```

@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Node project
-        uses: catenaclearing/catena-actions/composite/build-node@0
+        uses: catenaclearing/catena-actions/composite/build-node@v0
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```
