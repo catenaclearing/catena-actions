@@ -37,7 +37,7 @@ echo "Git name: $(git config --get user.name)"
 echo "Git email: $(git config --get user.email)"
 
 # Get the current version tag using Commitizen
-TAG="$(cz version --project)"
+TAG="v$(cz version --project)"
 echo "Current tag: ${TAG}"
 
 # Run Commitizen to bump the version and update changelog, ignoring specific errors
@@ -55,7 +55,11 @@ echo "New tag: ${NEW_TAG}"
 
 # Compare old and new tags, update if necessary
 if [[ "${TAG}" != "${NEW_TAG}" ]]; then
-  MAJOR_VERSION=v$(echo "${NEW_TAG}" | grep -oE '^[0-9]+')
+  echo "Updating latest tag..."
+  git tag -f latest
+  git push origin latest --force
+
+  MAJOR_VERSION=$(echo "${NEW_TAG}" | grep -oE '^v?[0-9]+')
   echo "Creating or updating major version tag: ${MAJOR_VERSION}"
   git tag -f "${MAJOR_VERSION}"
   git push origin "${MAJOR_VERSION}" --force
