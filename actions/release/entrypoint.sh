@@ -69,5 +69,4 @@ if [[ "${TAG}" != "${NEW_TAG}" ]]; then
 else
   echo "No new tag to create release for."
 fi
-
 echo "Done."
