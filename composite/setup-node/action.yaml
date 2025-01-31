@@ -8,9 +8,20 @@ inputs:
     required: false
     default: '22'
 
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
 runs:
   using: composite
   steps:
+    - name: Log in to the GitHub Container registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.machine_user_pat }}
+
     - name: Install Node.js
       id: install-node
       uses: actions/setup-node@v4

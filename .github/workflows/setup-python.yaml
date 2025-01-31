@@ -18,3 +18,5 @@ jobs:
 
       - name: Set Up Python Environment
         uses: catenaclearing/catena-actions/composite/setup-python@main
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
