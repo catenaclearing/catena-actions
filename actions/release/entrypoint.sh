@@ -50,7 +50,7 @@ git push origin "HEAD:main" --force
 git push --tags
 
 # Get the new tag (this assumes that the version bump creates a new tag)
-NEW_TAG="$(cz version --project)"
+NEW_TAG="v$(cz version --project)"
 echo "New tag: ${NEW_TAG}"
 
 # Compare old and new tags, update if necessary
@@ -59,7 +59,7 @@ if [[ "${TAG}" != "${NEW_TAG}" ]]; then
   git tag -f latest
   git push origin latest --force
 
-  MAJOR_VERSION=$(echo "${NEW_TAG}" | grep -oE '^[0-9]+')
+  MAJOR_VERSION=v$(echo "${NEW_TAG}" | grep -oE '^[0-9]+')
   echo "Creating or updating major version tag: ${MAJOR_VERSION}"
   git tag -f "${MAJOR_VERSION}"
   git push origin "${MAJOR_VERSION}" --force
