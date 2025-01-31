@@ -1,3 +1,9 @@
+## 0.4.0 (2025-01-31)
+
+### Feat
+
+- action to setup node environment
+
 ## 0.3.0 (2025-01-31)
 
 ### Feat
