@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm
+FROM python:3.13-slim-bookworm
 
 # Set the version of gh-token to install
 ENV GHTOKEN_VERSION=v2.0.2
