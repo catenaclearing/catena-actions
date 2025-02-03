@@ -1,3 +1,9 @@
+## v0.3.1 (2025-02-03)
+
+### Fix
+
+- get template path from context
+
 ## v0.3.0 (2025-01-31)
 
 ### Feat
