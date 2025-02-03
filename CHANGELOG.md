@@ -1,3 +1,9 @@
+## v0.4.2 (2025-02-03)
+
+### Fix
+
+- require token when creating PR
+
 ## v0.4.1 (2025-02-03)
 
 ### Fix
