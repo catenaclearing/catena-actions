@@ -1,0 +1,38 @@
+---
+name: Checkov Scan
+description: Synthezise the CDK stack then runs Checkov to scan for security vulnerabilities.
+
+inputs:
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
+  cdk_version:
+    description: AWS CDK version
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Set Up Environment and load Cached Dependencies
+      uses: catenaclearing/catena-actions/composite/setup-python@v0
+      with:
+        machine_user_pat: ${{ inputs.machine_user_pat }}
+
+    - name: Install AWS CDK
+      shell: bash
+      run: |
+        npm install -g aws-cdk@${{ inputs.cdk_version }}
+
+    - name: Synthezise CDK templates
+      shell: bash
+      run: |
+        poetry run cdk synth
+
+    - name: Checkov
+      shell: bash
+      run: |
+        poetry run checkov \
+          --config-file .checkov \
+          --baseline .checkov.baseline

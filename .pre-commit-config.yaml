@@ -25,9 +25,23 @@ repos:
 
   - repo: local
     hooks:
+      - id: test
+        name: Run Tests
+        entry: poetry run python -m pytest
+        pass_filenames: false
+        language: system
+        stages: [pre-push]
+
       - id: cdk-synth
         name: Run CDK Synth
         entry: poetry run cdk synth
+        pass_filenames: false
+        language: system
+        stages: [pre-push]
+
+      - id: checkov
+        name: Run Checkov
+        entry: poetry run checkov --config-file .checkov --baseline .checkov.baseline
         pass_filenames: false
         language: system
         stages: [pre-push]

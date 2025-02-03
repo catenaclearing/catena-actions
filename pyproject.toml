@@ -20,11 +20,24 @@ optional = true
 
 [tool.poetry.group.lint.dependencies]
 black = "^24.4.2"                                 # Python style checks
-commitizen = "^4.1.1"                            # Check commit messages
+commitizen = "^4.1.1"                             # Check commit messages
 pre-commit = "^4.1.0"                             # Runs a pipeline before commiting code
 yamllint = "^1.35.1"                              # Linter for YAML files
 ruff = "^0.9.4"                                   # Python linter
 
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.3.4"
+pytest-cov = "^6.0.0"
+
+
+[tool.poetry.group.checkov]
+optional = true
+
+[tool.poetry.group.checkov.dependencies]
+checkov = "^3.2.361"
 
 [build-system]
 build-backend = "poetry.core.masonry.api"
