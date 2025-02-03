@@ -1,3 +1,9 @@
+## v0.4.1 (2025-02-03)
+
+### Fix
+
+- add dummy function to generate code coverage
+
 ## v0.4.0 (2025-02-03)
 
 ### Feat
