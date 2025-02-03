@@ -1,3 +1,9 @@
+## v0.4.0 (2025-02-03)
+
+### Feat
+
+- add test,lint and checkov actions
+
 ## v0.3.1 (2025-02-03)
 
 ### Fix
