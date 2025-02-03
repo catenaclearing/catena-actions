@@ -16,13 +16,12 @@ clean: ## Removes project virtual env
 
 .PHONY: install
 install: ## Install the project dependencies and pre-commit using Poetry.
-	poetry install --with lint
-	poetry update
-	poetry run pre-commit install --hook-type pre-commit --hook-type commit-msg
+	poetry install --all-groups
+	poetry run pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 
 .PHONY: update
 update: ## Update the project and all resolvers dependencies using Poetry.
-	poetry update --with lint
+	poetry update --with lint,test,checkov
 
 .PHONY: lint
 lint: ## Apply linters to all files

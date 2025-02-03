@@ -1,0 +1,22 @@
+---
+name: Lint Python project
+description: Lint Python project using the pre-commit hooks
+
+inputs:
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
+
+runs:
+  using: composite
+  steps:
+    - name: Set Up Environment and load Cached Dependencies
+      uses: catenaclearing/catena-actions/composite/setup-python@v0
+      with:
+        machine_user_pat: ${{ inputs.machine_user_pat }}
+
+    - name: Lint
+      shell: bash
+      run: |
+        poetry run pre-commit run --all-files
