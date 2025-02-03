@@ -7,28 +7,22 @@ Open a Pull Request from a feature branch to the main branch.
 Example Workflow:
 
 ```yaml
-name: Release Package
+---
+name: Draft Pull Request
 
-on:
-  push:
-    branches:
-      - main
+on: create
 
 permissions:
-  id-token: write
   contents: read
+  pull-requests: write
 
 jobs:
- release:
-    name: Release
+  draft-pull-request:
+    name: Draft Pull Request
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-
-      - name: Pull Request
+      - name: Create Pull Request
         uses: catenaclearing/catena-actions/composite/open-pull-request@v0
-        with:
-          github_token: ${{ github.token }}
-          title: ${{ github.ref_name }}
 ```

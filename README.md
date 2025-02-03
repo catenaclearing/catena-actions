@@ -1,4 +1,4 @@
-# Catena Actions
+# Catena Actions - Public Repository
 
 Catena's commonly used GitHub Actions.
 
