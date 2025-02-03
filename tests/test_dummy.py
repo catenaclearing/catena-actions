@@ -1,2 +1,5 @@
+from dummy import dummy_function
+
+
 def test_dummy():
-    assert True
+    assert dummy_function() == "dummy"
