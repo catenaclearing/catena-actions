@@ -38,6 +38,8 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Test
         uses: catenaclearing/catena-actions/composite/test-python@main
@@ -53,8 +55,6 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Checkov
         uses: catenaclearing/catena-actions/composite/checkov@main
