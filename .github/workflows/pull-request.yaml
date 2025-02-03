@@ -17,3 +17,5 @@ jobs:
 
       - name: Pull Request
         uses: catenaclearing/catena-actions/composite/open-pull-request@main
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}

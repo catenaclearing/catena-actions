@@ -14,7 +14,6 @@ on: create
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   draft-pull-request:
@@ -25,4 +24,6 @@ jobs:
 
       - name: Create Pull Request
         uses: catenaclearing/catena-actions/composite/open-pull-request@v0
+        with:
+          machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 ```

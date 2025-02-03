@@ -12,6 +12,10 @@ inputs:
     required: true
     default: WWHTDA.md
 
+  machine_user_pat:
+    description: Github Catena Machine User Personal Access Token (PAT)
+    required: true
+
 runs:
   using: "composite"
   steps:
@@ -21,7 +25,7 @@ runs:
       shell: bash
       continue-on-error: true
       env:
-        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
       run: |
         # Fallback to github.ref_name if inputs.title is empty
         if [ -z "${{ inputs.title }}" ]; then
