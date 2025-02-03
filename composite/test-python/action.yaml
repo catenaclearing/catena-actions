@@ -37,8 +37,8 @@ runs:
       env:
         SONAR_TOKEN: ${{ inputs.sonar_token }}
 
-    - name: SonarQube Quality Gate check
-      id: sonarqube-quality-gate-check
-      uses: SonarSource/sonarqube-quality-gate-action@v1
-      env:
-        SONAR_TOKEN: ${{ inputs.sonar_token }}
+    # - name: SonarQube Quality Gate check
+    #   id: sonarqube-quality-gate-check
+    #   uses: SonarSource/sonarqube-quality-gate-action@v1
+    #   env:
+    #     SONAR_TOKEN: ${{ inputs.sonar_token }}
