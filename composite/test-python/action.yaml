@@ -16,6 +16,10 @@ inputs:
     description: Github Catena Machine User Personal Access Token (PAT)
     required: true
 
+  directory:
+    description: Directory to run the tests. Useful for monorepos when there are multiple projects and tests.
+    required: false
+    default: .
 
 runs:
   using: composite
@@ -24,10 +28,12 @@ runs:
       uses: catenaclearing/catena-actions/composite/setup-python@v0
       with:
         machine_user_pat: ${{ inputs.machine_user_pat }}
+        directory: ${{ inputs.directory }}
 
     - name: Pytest
       shell: bash
       run: |
+        cd ${{ inputs.directory }}
         poetry run python -m pytest
       env:
         AWS_DEFAULT_REGION: ${{ inputs.aws_region }}
