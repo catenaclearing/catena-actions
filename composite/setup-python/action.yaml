@@ -55,4 +55,4 @@ runs:
     - name: Install Dependencies
       shell: bash
       run: |
-        poetry install --all-groups
+        poetry install --all-groups --all-extras
