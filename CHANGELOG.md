@@ -1,3 +1,9 @@
+## v0.4.8 (2025-02-10)
+
+### Fix
+
+- allow tests and setup to run in subdirectories
+
 ## v0.4.7 (2025-02-10)
 
 ### Fix
