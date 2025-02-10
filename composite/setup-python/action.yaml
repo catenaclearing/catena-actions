@@ -17,6 +17,11 @@ inputs:
     description: Github Catena Machine User Personal Access Token (PAT)
     required: true
 
+  directory:
+    description: Directory to set up the Python environment. Useful for monorepos when there are multiple projects.
+    required: false
+    default: .
+
 runs:
   using: composite
   steps:
@@ -55,4 +60,5 @@ runs:
     - name: Install Dependencies
       shell: bash
       run: |
+        cd ${{ inputs.directory }}
         poetry install --all-groups --all-extras
