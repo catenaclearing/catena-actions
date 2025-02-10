@@ -1,3 +1,9 @@
+## v0.4.7 (2025-02-10)
+
+### Fix
+
+- set default python version to 3.12
+
 ## v0.4.6 (2025-02-10)
 
 ### Fix
