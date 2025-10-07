@@ -1,3 +1,9 @@
+## v0.5.0 (2025-10-07)
+
+### Feat
+
+- enable deploying from subdirectories
+
 ## v0.4.8 (2025-02-10)
 
 ### Fix
