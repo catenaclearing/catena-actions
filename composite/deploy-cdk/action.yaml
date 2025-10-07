@@ -24,6 +24,11 @@ inputs:
     required: false
     default: latest
 
+  directory:
+    description: Directory to set up the Python environment and deploy the CDK app.
+    required: false
+    default: .
+
 runs:
   using: composite
   steps:
@@ -31,6 +36,7 @@ runs:
       uses: catenaclearing/catena-actions/composite/setup-python@v0
       with:
         machine_user_pat: ${{ inputs.machine_user_pat }}
+        directory: ${{ inputs.directory }}
 
     - name: Install AWS CDK
       shell: bash
@@ -47,6 +53,7 @@ runs:
     - name: CDK Deploy
       shell: bash
       run: |
+        cd ${{ inputs.directory }}
         poetry run cdk deploy ${{ inputs.stack_name }} --force
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
