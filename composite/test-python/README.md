@@ -38,5 +38,4 @@ jobs:
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
           aws_region: ${{ vars.AWS_REGION }}
-          sonar_token: ${{ secrets.SONAR_TOKEN }}
 ```
