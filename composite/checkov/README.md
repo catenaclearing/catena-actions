@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   test:
-    name: Tests + SonarQube
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

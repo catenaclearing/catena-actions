@@ -1,16 +1,12 @@
 ---
-name: Test Python and SonarQube Scan
-description: Runs pytest and SonarQube scan on the codebase.
+name: Test Python
+description: Runs pytest.
 
 inputs:
   aws_region:
     description: AWS region to deploy
     required: false
     default: us-east-1
-
-  sonar_token:
-    description: SonarQube Token
-    required: true
 
   machine_user_pat:
     description: Github Catena Machine User Personal Access Token (PAT)
@@ -37,14 +33,3 @@ runs:
         poetry run python -m pytest
       env:
         AWS_DEFAULT_REGION: ${{ inputs.aws_region }}
-
-    - name: SonarQube Scan
-      uses: SonarSource/sonarqube-scan-action@v4
-      env:
-        SONAR_TOKEN: ${{ inputs.sonar_token }}
-
-    # - name: SonarQube Quality Gate check
-    #   id: sonarqube-quality-gate-check
-    #   uses: SonarSource/sonarqube-quality-gate-action@v1
-    #   env:
-    #     SONAR_TOKEN: ${{ inputs.sonar_token }}
