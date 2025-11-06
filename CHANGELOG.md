@@ -1,3 +1,14 @@
+## v0.6.0 (2025-11-06)
+
+### Feat
+
+- **TECH-2111**: remove SonarQube step from test action
+
+### Fix
+
+- remove sonar token from action's input
+- remove sonar props
+
 ## v0.5.0 (2025-10-07)
 
 ### Feat
