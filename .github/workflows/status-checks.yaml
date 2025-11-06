@@ -45,7 +45,6 @@ jobs:
         uses: catenaclearing/catena-actions/composite/test-python@main
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
-          sonar_token: ${{ secrets.SONAR_TOKEN }}
 
   checkov:
     name: Checkov
