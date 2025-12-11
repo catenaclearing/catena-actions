@@ -122,6 +122,7 @@ if [ -n "$session_id" ]; then
     message=$(echo "$job_status" | jq -r '.messageToUser // ""')
     created_at=$(echo "$job_status" | jq -r '.createdAt // ""')
     todos_count=$(echo "$job_status" | jq -r '.todos | length // 0')
+    todos_completed=$(echo "$job_status" | jq -r '[.todos[]? | select(.status == "completed")] | length // 0')
 
     echo "Status check $((attempt + 1))/$max_attempts - Halted: ${halted}, Reason: ${halt_reason}"
 
@@ -136,10 +137,38 @@ if [ -n "$session_id" ]; then
       echo "PR Link: ${pr_link}"
     fi
     if [ "$todos_count" -gt 0 ]; then
-      echo "Todos: ${todos_count} items"
+      echo "Todos: ${todos_completed}/${todos_count} completed"
     fi
     if [ -n "$message" ] && [ "$message" != "null" ]; then
       echo "Message: ${message}"
+    fi
+
+    # Check if job completed successfully - either PR link exists or all todos are completed
+    if [ -n "$pr_link" ] && [ "$pr_link" != "null" ]; then
+      echo ""
+      echo "✓ Changelog generation completed! Pull request created"
+      echo "✓ Pull Request: ${pr_link}"
+
+      if [ -n "$message" ] && [ "$message" != "null" ]; then
+        echo "Summary: ${message}"
+      fi
+
+      echo ""
+      echo "Full response:"
+      echo "$job_status" | jq .
+      exit 0
+    elif [ "$todos_count" -gt 0 ] && [ "$todos_completed" -eq "$todos_count" ]; then
+      echo ""
+      echo "✓ All todos completed! Changelog generation finished successfully"
+
+      if [ -n "$message" ] && [ "$message" != "null" ]; then
+        echo "Summary: ${message}"
+      fi
+
+      echo ""
+      echo "Full response:"
+      echo "$job_status" | jq .
+      exit 0
     fi
 
     if [ "$halted" = "true" ]; then
