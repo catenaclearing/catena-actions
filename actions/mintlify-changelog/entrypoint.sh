@@ -72,6 +72,10 @@ echo "$REQUEST_BODY" | jq .
 
 # Create agent job
 response=$(curl --silent --request POST \
+  --connect-timeout 30 \
+  --max-time 300 \
+  --retry 2 \
+  --retry-delay 2 \
   --url "https://api.mintlify.com/v1/agent/${INPUT_MINTLIFY_PROJECT_ID}/job" \
   --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}" \
   --header "Content-Type: application/json" \
@@ -104,25 +108,29 @@ echo "$response_body"
 if [ -n "$session_id" ]; then
   echo ""
   echo "Monitoring agent job status..."
-  max_attempts=60
+  max_attempts=90
   attempt=0
 
   while [ $attempt -lt $max_attempts ]; do
     sleep 10
 
     job_status=$(curl --silent --request GET \
+      --connect-timeout 10 \
+      --max-time 30 \
+      --retry 2 \
+      --retry-delay 1 \
       --url "https://api.mintlify.com/v1/agent/${INPUT_MINTLIFY_PROJECT_ID}/job/${session_id}" \
-      --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}")
+      --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}" || echo '{}')
 
-    halted=$(echo "$job_status" | jq -r '.haulted // false')
-    halt_reason=$(echo "$job_status" | jq -r '.haultReason // ""')
-    branch=$(echo "$job_status" | jq -r '.branch // ""')
-    subdomain=$(echo "$job_status" | jq -r '.subdomain // ""')
-    pr_link=$(echo "$job_status" | jq -r '.pullRequestLink // ""')
-    message=$(echo "$job_status" | jq -r '.messageToUser // ""')
-    created_at=$(echo "$job_status" | jq -r '.createdAt // ""')
-    todos_count=$(echo "$job_status" | jq -r '.todos | length // 0')
-    todos_completed=$(echo "$job_status" | jq -r '[.todos[]? | select(.status == "completed")] | length // 0')
+    halted=$(echo "$job_status" | jq -r '.haulted // false' 2>/dev/null || echo "false")
+    halt_reason=$(echo "$job_status" | jq -r '.haultReason // ""' 2>/dev/null || echo "")
+    branch=$(echo "$job_status" | jq -r '.branch // ""' 2>/dev/null || echo "")
+    subdomain=$(echo "$job_status" | jq -r '.subdomain // ""' 2>/dev/null || echo "")
+    pr_link=$(echo "$job_status" | jq -r '.pullRequestLink // ""' 2>/dev/null || echo "")
+    message=$(echo "$job_status" | jq -r '.messageToUser // ""' 2>/dev/null || echo "")
+    created_at=$(echo "$job_status" | jq -r '.createdAt // ""' 2>/dev/null || echo "")
+    todos_count=$(echo "$job_status" | jq -r '.todos | length // 0' 2>/dev/null || echo "0")
+    todos_completed=$(echo "$job_status" | jq -r '[.todos[]? | select(.status == "completed")] | length // 0' 2>/dev/null || echo "0")
 
     echo "Status check $((attempt + 1))/$max_attempts - Halted: ${halted}, Reason: ${halt_reason}"
 
@@ -155,7 +163,7 @@ if [ -n "$session_id" ]; then
 
       echo ""
       echo "Full response:"
-      echo "$job_status" | jq .
+      echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
       exit 0
     fi
 
@@ -165,13 +173,13 @@ if [ -n "$session_id" ]; then
         echo ""
         echo "✗ Agent job failed with error"
         echo "Full response:"
-        echo "$job_status" | jq .
+        echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
         exit 1
       elif [ "$halt_reason" = "github_missconfigured" ]; then
         echo ""
         echo "✗ GitHub misconfiguration detected"
         echo "Full response:"
-        echo "$job_status" | jq .
+        echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
         exit 1
       fi
     fi
@@ -180,9 +188,9 @@ if [ -n "$session_id" ]; then
     attempt=$((attempt + 1))
   done
 
-  echo "⚠ Agent job monitoring timed out after 10 minutes"
+  echo "⚠ Agent job monitoring timed out after 15 minutes"
   echo "Last known status:"
-  echo "$job_status" | jq .
+  echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
   exit 1
 else
   echo ""
