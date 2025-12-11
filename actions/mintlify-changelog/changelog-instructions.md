@@ -174,7 +174,26 @@ Always include:
 ## Date Format
 - **Filename**: YYYY-MM-DD (e.g., `2025-12-02`)
 - **Update description**: YYYY-MM-DD (e.g., `2025-12-02`)
-- **Display text**: Month Year (e.g., `December 2025`)
+- **Display text**: Day Month Year (e.g., `2nd December 2025`)
+
+## Quality Checks
+
+Before completing, verify the generated files meet these quality standards:
+
+### Basic Linting
+- **End of files**: Ensure files end with a single newline
+- **Trailing whitespace**: Remove any trailing spaces from lines
+- **YAML frontmatter**: Validate frontmatter syntax is correct
+- **JSON code blocks**: Ensure any JSON examples are valid
+- **Merge conflicts**: No conflict markers (<<<<<<, ======, >>>>>>)
+- **Broken links**: All internal links reference valid files/anchors
+- **Markdown syntax**: Proper formatting of headers, lists, code blocks
+
+### Mintlify-Specific
+- Valid component syntax for `<Update>`, `<Accordion>`, `<Warning>`, `<Tip>`, `<Check>`, `<Steps>`
+- Proper nesting and closing of all components
+- Icons use valid Mintlify icon names
+- Links use correct relative paths
 
 ## Output Checklist
 - [ ] Created new file: `api-reference/changelogs/v[X.Y.Z]-[YYYY-MM-DD].mdx`
@@ -186,3 +205,7 @@ Always include:
 - [ ] No placeholder text
 - [ ] Migration examples for breaking changes
 - [ ] Consistent date formatting
+- [ ] Files end with single newline
+- [ ] No trailing whitespace
+- [ ] Valid YAML and JSON syntax
+- [ ] No broken links or merge conflicts
