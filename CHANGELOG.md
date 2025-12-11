@@ -1,3 +1,9 @@
+## v0.7.3 (2025-12-11)
+
+### Fix
+
+- wrong monitor endpoiint
+
 ## v0.7.2 (2025-12-11)
 
 ### Fix
