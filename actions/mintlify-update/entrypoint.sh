@@ -39,26 +39,48 @@ echo "$response_body"
 # Monitor deployment status
 echo ""
 echo "Waiting for deployment to complete..."
-max_attempts=30
+max_attempts=90
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-  sleep 30
+  sleep 10
 
-  status=$(curl --silent --request GET \
+  response=$(curl --silent --request GET \
     --url "https://api.mintlify.com/v1/project/update/${INPUT_MINTLIFY_PROJECT_ID}/status" \
     --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}")
 
-  deployment_status=$(echo "$status" | jq -r '.status // "unknown"')
-  echo "Deployment status: $deployment_status (attempt $((attempt + 1))/$max_attempts)"
+  deployment_status=$(echo "$response" | jq -r '.status // ""')
+  summary=$(echo "$response" | jq -r '.summary // ""')
+  commit_sha=$(echo "$response" | jq -r '.commit.sha // ""')
+  commit_ref=$(echo "$response" | jq -r '.commit.ref // ""')
 
-  if [ "$deployment_status" = "deployed" ]; then
+  if [ -z "$deployment_status" ]; then
+    echo "⚠ Unable to retrieve status (attempt $((attempt + 1))/$max_attempts)"
+    echo "Response: $response"
+  else
+    echo "Deployment status: $deployment_status (attempt $((attempt + 1))/$max_attempts)"
+    if [ -n "$summary" ]; then
+      echo "Summary: $summary"
+    fi
+    if [ -n "$commit_sha" ]; then
+      echo "Commit: $commit_sha"
+    fi
+    if [ -n "$commit_ref" ]; then
+      echo "Ref: $commit_ref"
+    fi
+  fi
+
+  if [ "$deployment_status" = "success" ]; then
+    echo ""
     echo "✓ Documentation successfully deployed!"
-    echo "$status" | jq .
+    echo "Full response:"
+    echo "$response" | jq .
     exit 0
-  elif [ "$deployment_status" = "failed" ]; then
+  elif [ "$deployment_status" = "failure" ]; then
+    echo ""
     echo "✗ Documentation deployment failed"
-    echo "$status" | jq .
+    echo "Full response:"
+    echo "$response" | jq .
     exit 1
   fi
 
@@ -67,5 +89,5 @@ done
 
 echo "⚠ Deployment status check timed out after 15 minutes"
 echo "Last known status:"
-echo "$status" | jq .
+echo "$response" | jq .
 exit 1
