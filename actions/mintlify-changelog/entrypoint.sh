@@ -75,7 +75,7 @@ response_body=$(echo "$response" | sed '$d')
 # Extract session ID from headers
 session_id=$(grep -i "x-session-id:" /tmp/response_headers.txt | cut -d' ' -f2 | tr -d '\r\n' || echo "")
 
-if [ "$http_code" -ne 200 ]; then
+if [ "$http_code" -ne 200 ] && [ "$http_code" -ne 201 ] && [ "$http_code" -ne 202 ]; then
   echo "✗ Failed to create agent job (HTTP $http_code)"
   echo "$response_body"
   exit 1

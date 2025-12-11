@@ -27,7 +27,7 @@ trigger_response=$(curl --silent --request POST \
 http_code=$(echo "$trigger_response" | tail -n1)
 response_body=$(echo "$trigger_response" | sed '$d')
 
-if [ "$http_code" -ne 200 ] && [ "$http_code" -ne 201 ]; then
+if [ "$http_code" -ne 200 ] && [ "$http_code" -ne 201 ] && [ "$http_code" -ne 202 ]; then
   echo "✗ Failed to trigger documentation update (HTTP $http_code)"
   echo "$response_body"
   exit 1
