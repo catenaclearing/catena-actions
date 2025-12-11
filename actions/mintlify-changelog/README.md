@@ -29,5 +29,5 @@ jobs:
         with:
           mintlify_project_id: ${{ vars.MINTLIFY_PROJECT_ID }}
           mintlify_token: ${{ secrets.MINTLIFY_TOKEN }}
-          openapi_diff: ${{ steps.generate_diff.outputs.openapi_diff }}
+          openapi_diff_file: ${{ steps.generate_diff.outputs.openapi_diff_file }}
 ```

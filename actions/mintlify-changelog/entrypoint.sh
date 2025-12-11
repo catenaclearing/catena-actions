@@ -14,11 +14,21 @@ if [[ -z "${INPUT_MINTLIFY_PROJECT_ID}" ]]; then
   exit 1
 fi
 
-# Check if INPUT_OPENAPI_DIFF is set
-if [[ -z "${INPUT_OPENAPI_DIFF}" ]]; then
-  echo 'Missing input "openapi_diff: ${{ steps.diff.outputs.diff }}".'
+# Check if INPUT_OPENAPI_DIFF_FILE is set
+if [[ -z "${INPUT_OPENAPI_DIFF_FILE}" ]]; then
+  echo 'Missing input "openapi_diff_file: path/to/diff.txt".'
   exit 1
 fi
+
+# Check if the diff file exists
+if [[ ! -f "${INPUT_OPENAPI_DIFF_FILE}" ]]; then
+  echo "✗ Error: OpenAPI diff file not found at ${INPUT_OPENAPI_DIFF_FILE}"
+  exit 1
+fi
+
+# Read the diff from file
+echo "Reading OpenAPI diff from: ${INPUT_OPENAPI_DIFF_FILE}"
+OPENAPI_DIFF=$(cat "${INPUT_OPENAPI_DIFF_FILE}")
 
 # Read LLM instructions from file
 SCRIPT_DIR="$(dirname "$0")"
@@ -35,12 +45,12 @@ LLM_INSTRUCTIONS=$(cat "${LLM_INSTRUCTIONS_FILE}")
 
 
 echo "Mintlify Project ID: ${INPUT_MINTLIFY_PROJECT_ID}"
-echo "OpenAPI diff size: ${#INPUT_OPENAPI_DIFF} characters"
+echo "OpenAPI diff size: ${#OPENAPI_DIFF} characters"
 
 # Create the request body with separate messages for instructions and diff
 REQUEST_BODY=$(jq -n \
   --arg instructions "$LLM_INSTRUCTIONS" \
-  --arg diff "$INPUT_OPENAPI_DIFF" \
+  --arg diff "$OPENAPI_DIFF" \
   '{
     "messages": [
       {
