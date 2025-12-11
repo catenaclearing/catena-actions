@@ -1,3 +1,9 @@
+## v0.7.2 (2025-12-11)
+
+### Fix
+
+- failing to parse correct statuses
+
 ## v0.7.1 (2025-12-11)
 
 ### Fix
