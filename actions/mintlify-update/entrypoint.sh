@@ -36,6 +36,16 @@ fi
 echo "✓ Documentation update triggered successfully"
 echo "$response_body"
 
+# Extract status ID from response
+status_id=$(echo "$response_body" | jq -r '.statusId // ""')
+
+if [ -z "$status_id" ]; then
+  echo "⚠ No status ID returned, cannot monitor deployment"
+  exit 0
+fi
+
+echo "Status ID: ${status_id}"
+
 # Monitor deployment status
 echo ""
 echo "Waiting for deployment to complete..."
@@ -46,7 +56,7 @@ while [ $attempt -lt $max_attempts ]; do
   sleep 10
 
   response=$(curl --silent --request GET \
-    --url "https://api.mintlify.com/v1/project/update/${INPUT_MINTLIFY_PROJECT_ID}/status" \
+    --url "https://api.mintlify.com/v1/project/update-status/${status_id}" \
     --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}")
 
   deployment_status=$(echo "$response" | jq -r '.status // ""')
