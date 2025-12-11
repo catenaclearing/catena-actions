@@ -1,3 +1,9 @@
+## v0.7.11 (2025-12-11)
+
+### Fix
+
+- changelog instructions
+
 ## v0.7.10 (2025-12-11)
 
 ### Fix
