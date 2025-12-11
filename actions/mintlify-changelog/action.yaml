@@ -1,0 +1,20 @@
+---
+name: Update Mintlify Docs
+description: Trigger a documentation update on Mintlify for the specified project and monitor progress.
+
+inputs:
+  mintlify_project_id:
+    description: Mintlify Project ID
+    required: true
+
+  mintlify_token:
+    description: Mintlify Assistant API Token
+    required: true
+
+  openapi_diff:
+    description: The OpenAPI diff to include in the changelog generation
+    required: true
+
+runs:
+  using: docker
+  image: Dockerfile
