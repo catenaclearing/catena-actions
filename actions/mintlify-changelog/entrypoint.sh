@@ -143,7 +143,7 @@ if [ -n "$session_id" ]; then
       echo "Message: ${message}"
     fi
 
-    # Check if job completed successfully - either PR link exists or all todos are completed
+    # Check if PR link exists - this is the only signal that the job completed successfully
     if [ -n "$pr_link" ] && [ "$pr_link" != "null" ]; then
       echo ""
       echo "✓ Changelog generation completed! Pull request created"
@@ -157,61 +157,26 @@ if [ -n "$session_id" ]; then
       echo "Full response:"
       echo "$job_status" | jq .
       exit 0
-    elif [ "$todos_count" -gt 0 ] && [ "$todos_completed" -eq "$todos_count" ]; then
-      echo ""
-      echo "✓ All todos completed! Changelog generation finished successfully"
-
-      if [ -n "$message" ] && [ "$message" != "null" ]; then
-        echo "Summary: ${message}"
-      fi
-
-      echo ""
-      echo "Full response:"
-      echo "$job_status" | jq .
-      exit 0
     fi
 
+    # Check for error states
     if [ "$halted" = "true" ]; then
-      echo ""
-      echo "Agent job completed!"
-
-      if [ -n "$message" ] && [ "$message" != "null" ]; then
-        echo "Message: ${message}"
-      fi
-
-      if [ -n "$pr_link" ] && [ "$pr_link" != "null" ]; then
-        echo "✓ Pull Request: ${pr_link}"
-      fi
-
-      if [ "$halt_reason" = "completed" ]; then
-        echo "✓ Changelog generation completed successfully"
-        echo "Full response:"
-        echo "$job_status" | jq .
-        exit 0
-      elif [ "$halt_reason" = "error" ]; then
+      if [ "$halt_reason" = "error" ]; then
+        echo ""
         echo "✗ Agent job failed with error"
         echo "Full response:"
         echo "$job_status" | jq .
         exit 1
       elif [ "$halt_reason" = "github_missconfigured" ]; then
+        echo ""
         echo "✗ GitHub misconfiguration detected"
         echo "Full response:"
         echo "$job_status" | jq .
         exit 1
-      else
-        echo "⚠ Job halted with unexpected reason: ${halt_reason}"
-        echo "Full response:"
-        echo "$job_status" | jq .
-        exit 0
       fi
-    elif [ "$halt_reason" = "processing" ]; then
-      # Continue polling
-      :
-    else
-      # Unexpected state - show debug info
-      echo "⚠ Unexpected state - Halted: ${halted}, Reason: ${halt_reason}"
     fi
 
+    # Continue polling for all other states
     attempt=$((attempt + 1))
   done
 
