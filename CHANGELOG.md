@@ -1,3 +1,9 @@
+## v0.7.0 (2025-12-11)
+
+### Feat
+
+- **TECH-2405**: add actions to autoupdate docs and generate changelogs
+
 ## v0.6.0 (2025-11-06)
 
 ### Feat
