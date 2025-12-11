@@ -1,3 +1,10 @@
+## v0.7.9 (2025-12-11)
+
+### Fix
+
+- changelog action
+- changelog action
+
 ## v0.7.8 (2025-12-11)
 
 ### Fix
