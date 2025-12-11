@@ -1,3 +1,9 @@
+## v0.7.1 (2025-12-11)
+
+### Fix
+
+- failing when mintlify was returning 202
+
 ## v0.7.0 (2025-12-11)
 
 ### Feat
