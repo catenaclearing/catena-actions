@@ -115,17 +115,36 @@ if [ -n "$session_id" ]; then
       --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}")
 
     halted=$(echo "$job_status" | jq -r '.haulted // false')
-    halt_reason=$(echo "$job_status" | jq -r '.haultReason // "unknown"')
-    branch=$(echo "$job_status" | jq -r '.branch // "unknown"')
+    halt_reason=$(echo "$job_status" | jq -r '.haultReason // ""')
+    branch=$(echo "$job_status" | jq -r '.branch // ""')
+    subdomain=$(echo "$job_status" | jq -r '.subdomain // ""')
     pr_link=$(echo "$job_status" | jq -r '.pullRequestLink // ""')
     message=$(echo "$job_status" | jq -r '.messageToUser // ""')
+    created_at=$(echo "$job_status" | jq -r '.createdAt // ""')
+    todos_count=$(echo "$job_status" | jq -r '.todos | length // 0')
 
     echo "Status check $((attempt + 1))/$max_attempts - Halted: ${halted}, Reason: ${halt_reason}"
+
+    # Show additional info when available
+    if [ -n "$subdomain" ] && [ "$subdomain" != "null" ]; then
+      echo "Subdomain: ${subdomain}"
+    fi
+    if [ -n "$branch" ] && [ "$branch" != "null" ]; then
+      echo "Branch: ${branch}"
+    fi
+    if [ -n "$pr_link" ] && [ "$pr_link" != "null" ]; then
+      echo "PR Link: ${pr_link}"
+    fi
+    if [ "$todos_count" -gt 0 ]; then
+      echo "Todos: ${todos_count} items"
+    fi
+    if [ -n "$message" ] && [ "$message" != "null" ]; then
+      echo "Message: ${message}"
+    fi
 
     if [ "$halted" = "true" ]; then
       echo ""
       echo "Agent job completed!"
-      echo "Branch: ${branch}"
 
       if [ -n "$message" ] && [ "$message" != "null" ]; then
         echo "Message: ${message}"
@@ -137,19 +156,31 @@ if [ -n "$session_id" ]; then
 
       if [ "$halt_reason" = "completed" ]; then
         echo "✓ Changelog generation completed successfully"
+        echo "Full response:"
+        echo "$job_status" | jq .
         exit 0
       elif [ "$halt_reason" = "error" ]; then
         echo "✗ Agent job failed with error"
+        echo "Full response:"
         echo "$job_status" | jq .
         exit 1
       elif [ "$halt_reason" = "github_missconfigured" ]; then
         echo "✗ GitHub misconfiguration detected"
+        echo "Full response:"
         echo "$job_status" | jq .
         exit 1
       else
-        echo "⚠ Job halted with reason: ${halt_reason}"
+        echo "⚠ Job halted with unexpected reason: ${halt_reason}"
+        echo "Full response:"
+        echo "$job_status" | jq .
         exit 0
       fi
+    elif [ "$halt_reason" = "processing" ]; then
+      # Continue polling
+      :
+    else
+      # Unexpected state - show debug info
+      echo "⚠ Unexpected state - Halted: ${halted}, Reason: ${halt_reason}"
     fi
 
     attempt=$((attempt + 1))
