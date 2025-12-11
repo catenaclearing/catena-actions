@@ -1,3 +1,11 @@
+## v0.7.7 (2025-12-11)
+
+### Fix
+
+- update changelog action
+- instructions to generate changelogs
+- request parameter
+
 ## v0.7.6 (2025-12-11)
 
 ### Fix
