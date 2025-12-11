@@ -6,6 +6,17 @@ Analyze OpenAPI specification diffs and generate professional changelogs followi
 ## Input
 - **OpenAPI Diff**: Git diff with additions (`+`), deletions (`-`), and context lines
 
+## Important: Ignore Infrastructure Changes
+**CRITICAL**: Ignore changes to the `servers` section in the OpenAPI specification. These are environment-specific URLs (e.g., localhost vs. production) and should NOT be included in changelogs or affect version detection.
+
+Example to ignore:
+```diff
+- "url": "https://api.catenatelematics.com"
++ "url": "http://localhost:5001"
+```
+
+Similarly, ignore changes to authentication URLs that are environment-specific (e.g., `authorizationUrl`, `tokenUrl`, `refreshUrl` with different domains).
+
 ## Task
 1. Analyze the diff for: removed/added/renamed endpoints, parameter changes, response changes, schema modifications
 2. Create a new versioned changelog file in `api-reference/changelogs/` directory
