@@ -1,41 +1,44 @@
 # LLM Agent Instructions: Generating API Changelogs from OpenAPI Diffs
 
 ## Overview
-Analyze OpenAPI specification diffs and generate professional changelogs following Mintlify documentation standards.
+Analyze OpenAPI specification diffs and generate professional changelogs following Mintlify documentation standards with versioned changelog files.
 
 ## Input
 - **OpenAPI Diff**: Git diff with additions (`+`), deletions (`-`), and context lines
 
 ## Task
 1. Analyze the diff for: removed/added/renamed endpoints, parameter changes, response changes, schema modifications
-2. Generate a Mintlify-formatted changelog in `api-reference/changelog.mdx`
-3. Detect breaking changes vs. improvements
-4. Provide migration examples for breaking changes
+2. Create a new versioned changelog file in `api-reference/changelogs/` directory
+3. Update the main `api-reference/changelogs.mdx` file with a new `<Update>` entry
+4. Detect breaking changes vs. improvements
+5. Provide migration examples for breaking changes
+6. In doubt look at the current changelogs for style reference and follow the same patterns
 
-## Output Format
+## Output Structure
 
-### Frontmatter
+### Step 1: Create Versioned Changelog File
+**Filename format**: `api-reference/changelogs/v[X.Y.Z]-[YYYY-MM-DD].mdx`
+Example: `api-reference/changelogs/v2.1.0-2025-12-02.mdx`
+
+#### Frontmatter
 ```yaml
 ---
-title: API Changelog
-description: Track updates, breaking changes, and improvements to the API
-icon: clock-rotate-left
+title: "v[X.Y.Z] - [Release Title]"
+description: "[Brief description of changes]"
+icon: rocket
 iconType: duotone
-mode: wide
 ---
 ```
 
-### Structure
+#### Content Structure
 ```markdown
-## [Month Year] - [Release Title]
+<Update label="v[X.Y.Z] - [Release Title]" description="[Day Month Year]">
 
-<Update label="v[X.Y.Z] - [Brief Description]" description="[Summary]">
+[Intro paragraph explaining the release focus]
 
-[Intro paragraph]
-
-<Warning>
-**Breaking Changes:** [Summary if applicable]
-</Warning>
+<Check>
+**[Release Type]:** [Explanation of release significance]
+</Check>
 
 ### Endpoint Changes
 <AccordionGroup>
@@ -82,8 +85,53 @@ GET /endpoint?new=val
   </Accordion>
 </AccordionGroup>
 
+### Migration Checklist
+<Steps>
+  <Step title="[Action Item]">
+    [Details and instructions]
+  </Step>
+</Steps>
+
 </Update>
+
+---
+
+## Need Help?
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api-reference/telematics-api">
+    View complete endpoint documentation with current API structure
+  </Card>
+
+  <Card title="Contact Support" icon="life-ring" href="mailto:support@catenaclearing.io">
+    Questions about migrating your integration? Our team is here to help
+  </Card>
+</CardGroup>
 ```
+
+### Step 2: Update Main Changelog Page
+Add a new `<Update>` component to `api-reference/changelogs.mdx` (add it ABOVE existing updates for reverse chronological order):
+
+```markdown
+<Update label="v[X.Y.Z] - [Release Title]" description="[Day Month Year]">
+
+[1-2 sentence summary of the release]
+
+[View full changelog →](/api-reference/changelogs/v[X.Y.Z]-[YYYY-MM-DD])
+### Key Changes
+
+- **[Category 1]:** [Brief description]
+- **[Category 2]:** [Brief description]
+- **[Category 3]:** [Brief description]
+- **[Category 4]:** [Brief description]
+- **[Category 5]:** [Brief description]
+
+</Update>
+
+---
+```
+
+**Important**: Place new updates at the top (after the intro text, before older updates) for reverse chronological order.
 
 ## Guidelines
 
@@ -93,12 +141,16 @@ GET /endpoint?new=val
 - `list`: Lists/collections
 - `compress`: Consolidations
 - `calendar-day`: Time-based features
+- `rocket`: Major releases
+- `sparkles`: New features
+- `wrench`: Improvements
 
 ### Breaking Changes
 Always include:
 1. What changed (before/after)
 2. Migration path with code examples
 3. Impact on existing usage
+4. Use `<Warning>` callouts for breaking changes
 
 ### Writing Style
 - Be direct and specific
@@ -107,6 +159,7 @@ Always include:
 - Show realistic values in examples
 - Use `<Warning>` for breaking changes
 - Use `<Tip>` for best practices
+- Use `<Check>` for positive confirmations
 
 ### Detect Patterns
 - **Renames**: Similar paths/params with `-` and `+` pairs
@@ -114,13 +167,22 @@ Always include:
 - **Consolidations**: Multiple endpoints replaced by one with params
 
 ## Version Detection
-Extract version from diff: `- "version": "old"` and `+ "version": "new"`
-Use the current date for the release date.
+- Extract version from diff: `- "version": "old"` and `+ "version": "new"`
+- Use the current date for the release date in YYYY-MM-DD format
+- Version format: v[MAJOR].[MINOR].[PATCH]
 
-## Output
-Single markdown file with:
-- Valid Mintlify frontmatter
-- H2 for releases, H3 for categories
-- Properly formatted components
-- Code blocks with language tags
-- No placeholder text
+## Date Format
+- **Filename**: YYYY-MM-DD (e.g., `2025-12-02`)
+- **Update description**: YYYY-MM-DD (e.g., `2025-12-02`)
+- **Display text**: Month Year (e.g., `December 2025`)
+
+## Output Checklist
+- [ ] Created new file: `api-reference/changelogs/v[X.Y.Z]-[YYYY-MM-DD].mdx`
+- [ ] Added `<Update>` entry to `api-reference/changelogs.mdx`
+- [ ] Valid Mintlify frontmatter in both files
+- [ ] H2 for releases, H3 for categories
+- [ ] Properly formatted components
+- [ ] Code blocks with language tags
+- [ ] No placeholder text
+- [ ] Migration examples for breaking changes
+- [ ] Consistent date formatting
