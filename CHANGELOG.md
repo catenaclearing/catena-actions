@@ -1,3 +1,21 @@
+## v0.7.6 (2025-12-11)
+
+### Fix
+
+- instructions to generate changelogs
+
+## v0.7.5 (2025-12-11)
+
+### Fix
+
+- request parameter
+
+## v0.7.4 (2025-12-11)
+
+### Fix
+
+- pass openapi diff file
+
 ## v0.7.3 (2025-12-11)
 
 ### Fix
