@@ -7,7 +7,10 @@ Analyze OpenAPI specification diffs and generate professional changelogs followi
 - **OpenAPI Diff**: Git diff with additions (`+`), deletions (`-`), and context lines
 
 ## Important: Ignore Infrastructure Changes
-**CRITICAL**: Ignore changes to the `servers` section in the OpenAPI specification. These are environment-specific URLs (e.g., localhost vs. production) and should NOT be included in changelogs or affect version detection.
+**CRITICAL**: Ignore the following types of changes, as they are artifacts of the CI build process and do not represent actual API changes:
+
+### 1. Server URLs
+Ignore changes to the `servers` section - these are environment-specific URLs (e.g., localhost vs. production).
 
 Example to ignore:
 ```diff
@@ -15,7 +18,31 @@ Example to ignore:
 + "url": "http://localhost:5001"
 ```
 
-Similarly, ignore changes to authentication URLs that are environment-specific (e.g., `authorizationUrl`, `tokenUrl`, `refreshUrl` with different domains).
+### 2. Authentication URLs
+Ignore changes to environment-specific authentication URLs (e.g., `authorizationUrl`, `tokenUrl`, `refreshUrl` with different domains).
+
+### 3. Pagination Parameters
+Ignore removal of `cursor` and `size` parameters from individual endpoints. The OpenAPI spec generation process removes duplicate parameter definitions when they're inherited globally.
+
+Example to ignore:
+```diff
+- "parameters": [
+-   {
+-     "name": "cursor",
+-     "in": "query",
+-     "description": "Cursor for the next page",
+-     "schema": {"type": "string"}
+-   },
+-   {
+-     "name": "size",
+-     "in": "query",
+-     "description": "Page size",
+-     "schema": {"type": "integer", "default": 500, "minimum": 1, "maximum": 1000}
+-   }
+- ]
+```
+
+These parameters remain available through global definitions - functionality is unchanged.
 
 ## Task
 1. Analyze the diff for: removed/added/renamed endpoints, parameter changes, response changes, schema modifications
