@@ -1,3 +1,9 @@
+## v0.7.12 (2025-12-12)
+
+### Fix
+
+- changelog job not exiting loop
+
 ## v0.7.11 (2025-12-11)
 
 ### Fix
