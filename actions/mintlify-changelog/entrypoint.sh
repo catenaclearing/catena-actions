@@ -96,6 +96,7 @@ if [ "$http_code" -ne 200 ] && [ "$http_code" -ne 201 ] && [ "$http_code" -ne 20
 fi
 
 echo "✓ Agent job created successfully"
+
 if [ -n "$session_id" ]; then
   echo "Session ID: ${session_id}"
 fi
@@ -104,96 +105,8 @@ echo ""
 echo "Agent response (streaming):"
 echo "$response_body"
 
-# Monitor agent job status
-if [ -n "$session_id" ]; then
-  echo ""
-  echo "Monitoring agent job status..."
-  max_attempts=90
-  attempt=0
+echo ""
+echo "✓ Changelog generation job submitted and running asynchronously"
+echo "The agent will analyze the OpenAPI diff and create a pull request when complete"
 
-  while [ $attempt -lt $max_attempts ]; do
-    sleep 10
-
-    job_status=$(curl --silent --request GET \
-      --connect-timeout 10 \
-      --max-time 30 \
-      --retry 2 \
-      --retry-delay 1 \
-      --url "https://api.mintlify.com/v1/agent/${INPUT_MINTLIFY_PROJECT_ID}/job/${session_id}" \
-      --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}" || echo '{}')
-
-    halted=$(echo "$job_status" | jq -r '.haulted // false' 2>/dev/null || echo "false")
-    halt_reason=$(echo "$job_status" | jq -r '.haultReason // ""' 2>/dev/null || echo "")
-    branch=$(echo "$job_status" | jq -r '.branch // ""' 2>/dev/null || echo "")
-    subdomain=$(echo "$job_status" | jq -r '.subdomain // ""' 2>/dev/null || echo "")
-    pr_link=$(echo "$job_status" | jq -r '.pullRequestLink // ""' 2>/dev/null || echo "")
-    message=$(echo "$job_status" | jq -r '.messageToUser // ""' 2>/dev/null || echo "")
-    created_at=$(echo "$job_status" | jq -r '.createdAt // ""' 2>/dev/null || echo "")
-    todos_count=$(echo "$job_status" | jq -r '.todos | length // 0' 2>/dev/null || echo "0")
-    todos_completed=$(echo "$job_status" | jq -r '[.todos[]? | select(.status == "completed")] | length // 0' 2>/dev/null || echo "0")
-
-    echo "Status check $((attempt + 1))/$max_attempts - Halted: ${halted}, Reason: ${halt_reason}"
-
-    # Show additional info when available
-    if [ -n "$subdomain" ] && [ "$subdomain" != "null" ]; then
-      echo "Subdomain: ${subdomain}"
-    fi
-    if [ -n "$branch" ] && [ "$branch" != "null" ]; then
-      echo "Branch: ${branch}"
-    fi
-    if [ -n "$pr_link" ] && [ "$pr_link" != "null" ]; then
-      echo "PR Link: ${pr_link}"
-    fi
-    if [ "$todos_count" -gt 0 ]; then
-      echo "Todos: ${todos_completed}/${todos_count} completed"
-    fi
-    if [ -n "$message" ] && [ "$message" != "null" ]; then
-      echo "Message: ${message}"
-    fi
-
-    # Check if PR link exists - this is the only signal that the job completed successfully
-    if [ -n "$pr_link" ] && [ "$pr_link" != "null" ]; then
-      echo ""
-      echo "✓ Changelog generation completed! Pull request created"
-      echo "✓ Pull Request: ${pr_link}"
-
-      if [ -n "$message" ] && [ "$message" != "null" ]; then
-        echo "Summary: ${message}"
-      fi
-
-      echo ""
-      echo "Full response:"
-      echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
-      exit 0
-    fi
-
-    # Check for error states
-    if [ "$halted" = "true" ]; then
-      if [ "$halt_reason" = "error" ]; then
-        echo ""
-        echo "✗ Agent job failed with error"
-        echo "Full response:"
-        echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
-        exit 1
-      elif [ "$halt_reason" = "github_missconfigured" ]; then
-        echo ""
-        echo "✗ GitHub misconfiguration detected"
-        echo "Full response:"
-        echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
-        exit 1
-      fi
-    fi
-
-    # Continue polling for all other states
-    attempt=$((attempt + 1))
-  done
-
-  echo "⚠ Agent job monitoring timed out after 15 minutes"
-  echo "Last known status:"
-  echo "$job_status" | jq . 2>/dev/null || echo "$job_status"
-  exit 1
-else
-  echo ""
-  echo "⚠ No session ID returned, cannot monitor job status"
-  echo "✓ Changelog generation job submitted"
-fi
+exit 0
