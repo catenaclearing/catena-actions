@@ -44,6 +44,25 @@ Example to ignore:
 
 These parameters remain available through global definitions - functionality is unchanged.
 
+### 4. Hidden and Excluded Endpoints
+Ignore changes to endpoints that have `x-hidden: true` or `x-excluded: true` extensions in the OpenAPI spec. These are intentionally hidden from navigation or excluded from documentation.
+
+**Exception**: If an endpoint is being **un-hidden** or **un-excluded** (the extension is removed), document it as a new endpoint addition.
+
+Examples to ignore:
+```diff
++ "x-hidden": true
+```
+```diff
++ "x-excluded": true
+```
+
+Example to document (endpoint becoming visible):
+```diff
+- "x-hidden": true
+```
+This should be treated as a new endpoint being added to the public API documentation.
+
 ## Task
 1. Analyze the diff for: removed/added/renamed endpoints, parameter changes, response changes, schema modifications
 2. Create a new versioned changelog file in `api-reference/changelogs/` directory
@@ -274,6 +293,7 @@ Before completing, verify the generated files meet these quality standards:
 - [ ] Correct versioning based on changes
 - [ ] Created new file: `api-reference/changelogs/v[X.Y.Z]-[YYYY-MM-DD].mdx`
 - [ ] Added `<Update>` entry to `api-reference/changelogs.mdx`
+- [ ] Hidden/excluded endpoints are ignored, and un-hidden/un-excluded are documented
 - [ ] Valid Mintlify frontmatter in both files
 - [ ] H2 for releases, H3 for categories
 - [ ] Properly formatted components
