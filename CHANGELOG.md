@@ -1,3 +1,9 @@
+## v0.7.13 (2025-12-15)
+
+### Fix
+
+- add instructions to ignore hidden and exluded endpoints
+
 ## v0.7.12 (2025-12-12)
 
 ### Fix
