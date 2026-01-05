@@ -1,3 +1,9 @@
+## v0.8.0 (2026-01-05)
+
+### Feat
+
+- **TECH-2161**: improve python setup and CDK deploy times
+
 ## v0.7.13 (2025-12-15)
 
 ### Fix
