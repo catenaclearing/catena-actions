@@ -1,3 +1,9 @@
+## v0.8.2 (2026-01-05)
+
+### Fix
+
+- **TECH-2161**: set up docker buildx before deploying CDK
+
 ## v0.8.1 (2026-01-05)
 
 ### Fix
