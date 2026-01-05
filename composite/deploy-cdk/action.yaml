@@ -38,10 +38,16 @@ runs:
         machine_user_pat: ${{ inputs.machine_user_pat }}
         directory: ${{ inputs.directory }}
 
-    - name: Install AWS CDK
-      shell: bash
-      run: |
-        npm install -g aws-cdk@${{ inputs.cdk_version }}
+    - name: Cache CDK
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: npm-cdk-${{ runner.os }}-${{ inputs.cdk_version }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -54,7 +60,8 @@ runs:
       shell: bash
       run: |
         cd ${{ inputs.directory }}
-        poetry run cdk deploy ${{ inputs.stack_name }} --force
+        source .venv/bin/activate
+        npx -y aws-cdk@${{ inputs.cdk_version }} deploy ${{ inputs.stack_name }} --force
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1

@@ -37,28 +37,33 @@ runs:
       run: |
         git config --global url.https://${{ inputs.machine_user_pat }}@github.com/.insteadOf https://github.com/
 
-    - name: Install Poetry
-      shell: bash
-      run: |
-        curl -sSL https://install.python-poetry.org | python3 - --version ${{ inputs.poetry_version }}
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-    - name: Configure Poetry
-      shell: bash
-      run: |
-        poetry config virtualenvs.create true
-        poetry config virtualenvs.in-project true
-        poetry config virtualenvs.path .venv
-        poetry config cache-dir ~/.poetry/cache
-
     - name: Set up Python
+      id: setup-python
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python_version }}
-        cache: poetry
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: ${{ inputs.poetry_version }}
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        installer-parallel: true
+
+    - name: Load cached venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.directory }}/.venv
+        key: >-
+          venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
+          ${{ hashFiles(format('{0}/poetry.lock', inputs.directory)) }}
 
     - name: Install Dependencies
+      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
       shell: bash
       run: |
         cd ${{ inputs.directory }}
-        poetry install --all-groups --all-extras
+        poetry config keyring.enabled false
+        poetry install --no-interaction --no-root --sync --all-groups --all-extras
