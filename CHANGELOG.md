@@ -1,3 +1,9 @@
+## v0.8.1 (2026-01-05)
+
+### Fix
+
+- **TECH-2161**: optimize static site deployment
+
 ## v0.8.0 (2026-01-05)
 
 ### Feat
