@@ -38,16 +38,6 @@ runs:
         machine_user_pat: ${{ inputs.machine_user_pat }}
         directory: ${{ inputs.directory }}
 
-    - name: Set up Docker Buildx
-      id: buildx
-      uses: docker/setup-buildx-action@v3
-      with:
-        driver: docker-container
-        buildkitd-flags: --debug
-
-    - name: Expose GitHub Runtime (for gha cache)
-      uses: crazy-max/ghaction-github-runtime@v3
-
     - name: Cache CDK
       uses: actions/cache@v4
       with:
@@ -75,4 +65,3 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
-        BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
