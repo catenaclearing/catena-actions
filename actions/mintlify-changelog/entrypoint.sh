@@ -59,7 +59,7 @@ REQUEST_BODY=$(jq -n \
       },
       {
         "role": "system",
-        "content": "Here is the git diff of the OpenAPI specification file:\n\n```diff\n\($diff)\n```\n\nPlease analyze this diff and generate a changelog following the instructions provided."
+        "content": "Here is the oasdiff output comparing the old and new OpenAPI specifications:\n\n```\n\($diff)\n```\n\nPlease analyze this diff and generate a changelog following the instructions provided."
       }
     ],
     "asDraft": false
