@@ -1,3 +1,9 @@
+## v0.9.0 (2026-02-11)
+
+### Feat
+
+- improve the changelog action to use oasdiff to compare openapi specs
+
 ## v0.8.2 (2026-01-05)
 
 ### Fix
