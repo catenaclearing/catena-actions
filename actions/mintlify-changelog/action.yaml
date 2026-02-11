@@ -11,8 +11,12 @@ inputs:
     description: Mintlify Assistant API Token
     required: true
 
-  openapi_diff_file:
-    description: Path to file containing the OpenAPI diff
+  old_openapi_file:
+    description: Path to the old/base OpenAPI specification file (JSON or YAML)
+    required: true
+
+  new_openapi_file:
+    description: Path to the new/changed OpenAPI specification file (JSON or YAML)
     required: true
 
 runs:
