@@ -26,31 +26,22 @@ if [[ ! -f "${INPUT_OPENAPI_DIFF_FILE}" ]]; then
   exit 1
 fi
 
-# Read the diff from file
-echo "Reading OpenAPI diff from: ${INPUT_OPENAPI_DIFF_FILE}"
-OPENAPI_DIFF=$(cat "${INPUT_OPENAPI_DIFF_FILE}")
-
 # Read LLM instructions from file
 SCRIPT_DIR="$(dirname "$0")"
 LLM_INSTRUCTIONS_FILE="${SCRIPT_DIR}/changelog-instructions.md"
 
+# Check if the instructions file exists
 if [ ! -f "${LLM_INSTRUCTIONS_FILE}" ]; then
   echo "✗ Error: LLM instructions file not found at ${LLM_INSTRUCTIONS_FILE}"
   exit 1
 fi
 
-echo "Reading LLM instructions from: ${LLM_INSTRUCTIONS_FILE}"
-LLM_INSTRUCTIONS=$(cat "${LLM_INSTRUCTIONS_FILE}")
-
-
-
 echo "Mintlify Project ID: ${INPUT_MINTLIFY_PROJECT_ID}"
-echo "OpenAPI diff size: ${#OPENAPI_DIFF} characters"
 
 # Create the request body with separate messages for instructions and diff
 REQUEST_BODY=$(jq -n \
-  --arg instructions "$LLM_INSTRUCTIONS" \
-  --arg diff "$OPENAPI_DIFF" \
+  --rawfile instructions "$LLM_INSTRUCTIONS_FILE" \
+  --rawfile diff "$INPUT_OPENAPI_DIFF_FILE" \
   '{
     "messages": [
       {
