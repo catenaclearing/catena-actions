@@ -1,3 +1,9 @@
+## v0.9.1 (2026-02-12)
+
+### Fix
+
+- **TECH-3434**: fix mintlify changelog action
+
 ## v0.9.0 (2026-02-11)
 
 ### Feat
