@@ -14,21 +14,34 @@ if [[ -z "${INPUT_MINTLIFY_PROJECT_ID}" ]]; then
   exit 1
 fi
 
-# Check if INPUT_OPENAPI_DIFF_FILE is set
-if [[ -z "${INPUT_OPENAPI_DIFF_FILE}" ]]; then
-  echo 'Missing input "openapi_diff_file: path/to/diff.txt".'
+# Check if INPUT_OLD_OPENAPI_FILE is set
+if [[ -z "${INPUT_OLD_OPENAPI_FILE}" ]]; then
+  echo 'Missing input "old_openapi_file: path/to/old.yaml".'
   exit 1
 fi
 
-# Check if the diff file exists
-if [[ ! -f "${INPUT_OPENAPI_DIFF_FILE}" ]]; then
-  echo "✗ Error: OpenAPI diff file not found at ${INPUT_OPENAPI_DIFF_FILE}"
+# Check if INPUT_NEW_OPENAPI_FILE is set
+if [[ -z "${INPUT_NEW_OPENAPI_FILE}" ]]; then
+  echo 'Missing input "new_openapi_file: path/to/new.yaml".'
+  exit 1
+fi
+
+# Check if the old OpenAPI file exists
+if [[ ! -f "${INPUT_OLD_OPENAPI_FILE}" ]]; then
+  echo "✗ Error: Old OpenAPI file not found at ${INPUT_OLD_OPENAPI_FILE}"
+  exit 1
+fi
+
+# Check if the new OpenAPI file exists
+if [[ ! -f "${INPUT_NEW_OPENAPI_FILE}" ]]; then
+  echo "✗ Error: New OpenAPI file not found at ${INPUT_NEW_OPENAPI_FILE}"
   exit 1
 fi
 
 # Read LLM instructions from file
 SCRIPT_DIR="$(dirname "$0")"
 LLM_INSTRUCTIONS_FILE="${SCRIPT_DIR}/changelog-instructions.md"
+OPENAPI_DIFF_FILE="${SCRIPT_DIR}/oasdiff-output.txt"
 
 # Check if the instructions file exists
 if [ ! -f "${LLM_INSTRUCTIONS_FILE}" ]; then
@@ -38,10 +51,12 @@ fi
 
 echo "Mintlify Project ID: ${INPUT_MINTLIFY_PROJECT_ID}"
 
+oasdiff diff "${INPUT_OLD_OPENAPI_FILE}" "${INPUT_NEW_OPENAPI_FILE}" > "${OPENAPI_DIFF_FILE}"
+
 # Create the request body with separate messages for instructions and diff
 REQUEST_BODY=$(jq -n \
   --rawfile instructions "$LLM_INSTRUCTIONS_FILE" \
-  --rawfile diff "$INPUT_OPENAPI_DIFF_FILE" \
+  --rawfile diff "$OPENAPI_DIFF_FILE" \
   '{
     "messages": [
       {
