@@ -1,3 +1,9 @@
+## v0.9.2 (2026-02-24)
+
+### Fix
+
+- **TECH-3434**: use expected input in mintlify changelog action
+
 ## v0.9.1 (2026-02-12)
 
 ### Fix
