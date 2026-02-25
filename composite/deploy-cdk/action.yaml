@@ -24,6 +24,11 @@ inputs:
     required: false
     default: latest
 
+  docker_driver:
+    description: Docker driver to use on buildx
+    required: false
+    default: docker-container
+
   directory:
     description: Directory to set up the Python environment and deploy the CDK app.
     required: false
@@ -42,7 +47,7 @@ runs:
       id: buildx
       uses: docker/setup-buildx-action@v3
       with:
-        driver: docker-container
+        driver: ${{ inputs.docker_driver }}
         buildkitd-flags: --debug
 
     - name: Expose GitHub Runtime (for gha cache)
