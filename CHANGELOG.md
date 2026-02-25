@@ -1,3 +1,9 @@
+## v0.9.3 (2026-02-25)
+
+### Fix
+
+- Add input for docker_driver
+
 ## v0.9.2 (2026-02-24)
 
 ### Fix
