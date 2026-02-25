@@ -34,6 +34,11 @@ inputs:
     required: false
     default: .
 
+  exclusively:
+    description: Deploy only the specified stack, without its dependencies.
+    required: false
+    default: "false"
+
 runs:
   using: composite
   steps:
@@ -76,7 +81,9 @@ runs:
       run: |
         cd ${{ inputs.directory }}
         source .venv/bin/activate
-        npx -y aws-cdk@${{ inputs.cdk_version }} deploy ${{ inputs.stack_name }} --force
+        EXCLUSIVELY=${{ inputs.exclusively == 'true' && '--exclusively' || '""' }}
+        npx -y aws-cdk@${{ inputs.cdk_version }} deploy ${{ inputs.stack_name }} \
+          --force $EXCLUSIVELY
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
