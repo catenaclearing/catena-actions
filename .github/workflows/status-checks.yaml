@@ -20,7 +20,7 @@ jobs:
       group: lint-${{ github.workflow }}-${{ github.actor }}-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Lint
         uses: catenaclearing/catena-actions/composite/lint-python@main
@@ -34,7 +34,7 @@ jobs:
       group: test-${{ github.workflow }}-${{ github.actor }}-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -50,7 +50,7 @@ jobs:
       group: checkov-${{ github.workflow }}-${{ github.actor }}-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Checkov
         uses: catenaclearing/catena-actions/composite/checkov@main

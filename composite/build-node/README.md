@@ -23,7 +23,7 @@ jobs:
     name: Build Node
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build Node project
         uses: catenaclearing/catena-actions/composite/build-node@v0

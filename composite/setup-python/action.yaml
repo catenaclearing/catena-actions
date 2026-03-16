@@ -26,7 +26,7 @@ runs:
   using: composite
   steps:
     - name: Log in to the GitHub Container registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -39,7 +39,7 @@ runs:
 
     - name: Set up Python
       id: setup-python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ inputs.python_version }}
 
@@ -53,7 +53,7 @@ runs:
 
     - name: Load cached venv
       id: cached-poetry-dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ inputs.directory }}/.venv
         key: >-
