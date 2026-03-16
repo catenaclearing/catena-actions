@@ -76,6 +76,11 @@ echo "Creating Mintlify agent job to generate changelog..."
 echo "Request body:"
 echo "$REQUEST_BODY" | jq .
 
+# Write request body to a temp file to avoid "Argument list too long" OS limit
+REQUEST_BODY_FILE=$(mktemp /tmp/request_body.XXXXXX.json)
+trap 'rm -f "$REQUEST_BODY_FILE"' EXIT
+printf '%s' "$REQUEST_BODY" > "$REQUEST_BODY_FILE"
+
 # Create agent job
 response=$(curl --silent --request POST \
   --connect-timeout 30 \
@@ -85,9 +90,11 @@ response=$(curl --silent --request POST \
   --url "https://api.mintlify.com/v1/agent/${INPUT_MINTLIFY_PROJECT_ID}/job" \
   --header "Authorization: Bearer ${INPUT_MINTLIFY_TOKEN}" \
   --header "Content-Type: application/json" \
-  --data "$REQUEST_BODY" \
+  --data "@${REQUEST_BODY_FILE}" \
   --write-out "\n%{http_code}" \
   --dump-header /tmp/response_headers.txt)
+rm -f "$REQUEST_BODY_FILE"
+trap - EXIT
 
 http_code=$(echo "$response" | tail -n1)
 response_body=$(echo "$response" | sed '$d')
