@@ -19,7 +19,7 @@ catena-cdk-package = {git = "https://github.com/catenaclearing/catena-cdk-packag
 optional = true
 
 [tool.poetry.group.lint.dependencies]
-black = "^24.4.2"                                 # Python style checks
+black = "^26.3.1"                                 # Python style checks
 commitizen = "^4.1.1"                             # Check commit messages
 pre-commit = "^4.1.0"                             # Runs a pipeline before commiting code
 yamllint = "^1.35.1"                              # Linter for YAML files
