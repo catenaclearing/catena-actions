@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name:
+      - name: Run Checkov scan
         uses: catenaclearing/catena-actions/composite/checkov@v0
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
