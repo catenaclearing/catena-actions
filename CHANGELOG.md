@@ -1,3 +1,9 @@
+## v0.9.6 (2026-03-16)
+
+### Fix
+
+- **TECH-3963**: update actions major versions to use new node24, as node20 is being deprecated from GH Actions
+
 ## v0.9.5 (2026-03-16)
 
 ### Fix
