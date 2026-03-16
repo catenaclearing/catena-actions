@@ -29,7 +29,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name:
         uses: catenaclearing/catena-actions/composite/checkov@v0

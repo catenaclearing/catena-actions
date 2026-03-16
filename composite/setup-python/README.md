@@ -23,7 +23,7 @@ jobs:
     name: Setup Python and Poetry
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Python environment
         uses: catenaclearing/catena-actions/composite/setup-python@v0

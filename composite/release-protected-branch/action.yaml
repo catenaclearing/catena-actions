@@ -15,7 +15,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Temporarily disable "include administrators" branch protection
       uses: benjefferies/branch-protection-bot@v1

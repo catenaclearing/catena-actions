@@ -20,7 +20,7 @@ jobs:
     name: Draft Pull Request
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Create Pull Request
         uses: catenaclearing/catena-actions/composite/open-pull-request@v0

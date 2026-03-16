@@ -24,7 +24,7 @@ jobs:
     name: Release Package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Bump Version and Release to Protected Branch
       uses: catenaclearing/catena-actions/composite/release-protected-branch@v0

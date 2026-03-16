@@ -35,7 +35,7 @@ jobs:
       group: development-${{ github.workflow }}-${{ github.actor }}-${{ github.ref }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Deploy CDK Static Site
         uses: catenaclearing/catena-actions/composite/deploy-cdk-static-site@v0
