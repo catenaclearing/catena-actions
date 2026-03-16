@@ -1,3 +1,9 @@
+## v0.9.5 (2026-03-16)
+
+### Fix
+
+- **TECH-3948**: pass changelog diff through file instead of raw body
+
 ## v0.9.4 (2026-02-25)
 
 ### Fix
