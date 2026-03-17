@@ -1,3 +1,9 @@
+## v0.9.8 (2026-03-17)
+
+### Fix
+
+- **TECH-3948**: debug changelog action randomly failing
+
 ## v0.9.7 (2026-03-17)
 
 ### Fix
