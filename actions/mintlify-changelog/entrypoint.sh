@@ -82,7 +82,7 @@ trap 'rm -f "$REQUEST_BODY_FILE"' EXIT
 printf '%s' "$REQUEST_BODY" > "$REQUEST_BODY_FILE"
 
 # Create agent job
-response=$(curl --silent --request POST \
+response=$(curl --silent --show-error --request POST \
   --connect-timeout 30 \
   --max-time 300 \
   --retry 2 \
