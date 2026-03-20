@@ -1,3 +1,9 @@
+## v0.9.9 (2026-03-20)
+
+### Fix
+
+- **TECH-3948**: force HTTP 1.1 when calling mintlify
+
 ## v0.9.8 (2026-03-17)
 
 ### Fix
