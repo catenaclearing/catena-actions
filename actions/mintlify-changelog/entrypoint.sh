@@ -83,6 +83,7 @@ printf '%s' "$REQUEST_BODY" > "$REQUEST_BODY_FILE"
 
 # Create agent job
 response=$(curl --silent --show-error --request POST \
+  --http1.1 \
   --connect-timeout 30 \
   --max-time 300 \
   --retry 2 \
