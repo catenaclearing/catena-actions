@@ -11,7 +11,9 @@ init: clean install lint ## Clean environment and reinstall all dependencies
 
 .PHONY: clean
 clean: ## Removes project virtual env and untracked files
-	rm -rf .venv **/.venv cdk.out build dist **/*.egg-info .pytest_cache node_modules .coverage **/__pycache__ **/*.pyc
+	rm -rf .venv cdk.out build dist .pytest_cache node_modules .coverage
+	find . \( -name '.venv' -o -name '*.egg-info' -o -name '__pycache__' \) -exec rm -rf {} +
+	find . -name '*.pyc' -delete
 	poetry env remove --all
 
 .PHONY: install
