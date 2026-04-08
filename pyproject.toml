@@ -1,6 +1,6 @@
 [project]
 name = "catena-actions"
-version = "0.9.9"
+version = "0.10.0"
 authors = [{ name = "Andre Sionek", email = "andre.sionek@catenaclearing.io" }]
 description = "GitHub Actions and composite actions used by Catena"
 keywords = ["github", "actions", "cicd", "pipeline", "github actions"]

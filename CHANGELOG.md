@@ -1,3 +1,13 @@
+## v0.10.0 (2026-04-08)
+
+### Feat
+
+- retire black and embrace ruff
+
+### Fix
+
+- update poetry version at setup-python action to 2.3.3
+
 ## v0.9.9 (2026-03-20)
 
 ### Fix
