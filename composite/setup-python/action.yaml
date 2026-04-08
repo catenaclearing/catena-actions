@@ -11,7 +11,7 @@ inputs:
   poetry_version:
     description: Poetry version
     required: false
-    default: '2.0.1'
+    default: '2.3.3'
 
   machine_user_pat:
     description: Github Catena Machine User Personal Access Token (PAT)
