@@ -88,7 +88,7 @@ ignore = [
   "D104", # Missing docstring in public package
   "ANN003", # Missing type annotation for **kwargs
   "ANN002", # Missing type annotation for **args
-  "ANN1", # Missing type annotation for self in methot or cls method
+  "ANN1", # Missing type annotation for self in method or cls method
   "ANN401", # Dynamically typed expressions (typing.Any) are disallowed
   "A002", # Argument `id` is shadowing a Python builtin
   "F821", # Undefined name
