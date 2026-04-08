@@ -1,7 +1,7 @@
 ---
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v6.0.0
     hooks:
       - id: check-toml
       - id: end-of-file-fixer
@@ -22,6 +22,31 @@ repos:
         language: docker_image
         types: ["dockerfile"]
         entry: ghcr.io/hadolint/hadolint hadolint
+
+  - repo: https://github.com/python-poetry/poetry
+    rev: "2.3.3"
+    hooks:
+      - id: poetry-check
+        args: ["--lock"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.15.9"
+    hooks:
+      - id: ruff-check
+        args: [--no-fix, --config=pyproject.toml]
+      - id: ruff-format
+        args: [--check]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: "v1.38.0"
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: "v4.13.9"
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
 
   - repo: local
     hooks:
@@ -45,30 +70,3 @@ repos:
         pass_filenames: false
         language: system
         stages: [pre-push]
-
-      - id: black
-        name: Run Black
-        entry: poetry run black
-        language: system
-        types: [file, python]
-        stages: [pre-commit]
-
-      - id: ruff
-        name: Run Ruff
-        entry: poetry run ruff check --fix
-        language: system
-        types: [file, python]
-        stages: [pre-commit]
-
-      - id: yamllint
-        name: Run Yamllint
-        entry: poetry run yamllint
-        language: system
-        types: [file, yaml]
-        stages: [pre-commit]
-
-      - id: commit-message
-        name: Check commit message
-        entry: poetry run cz check --commit-msg-file
-        language: system
-        stages: [commit-msg]

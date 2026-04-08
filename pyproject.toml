@@ -1,10 +1,15 @@
-[tool.poetry]
-authors = ["Andre Sionek <andre.sionek@catenaclearing.io>"]
-keywords = ['github', 'actions', 'cicd', 'pipeline', 'github actions']
+[project]
+name = "catena-actions"
+version = "0.9.9"
+authors = [{ name = "Andre Sionek", email = "andre.sionek@catenaclearing.io" }]
+description = "GitHub Actions and composite actions used by Catena"
+keywords = ["github", "actions", "cicd", "pipeline", "github actions"]
 readme = "README.md"
-homepage = "https://catenaclearing.io"
-name = "Catena Cations"
-version = "v0.9.9"
+requires-python = ">=3.11,<4.0"
+dynamic = ["dependencies"]
+urls = { Homepage = "https://catenaclearing.io" }
+
+[tool.poetry]
 package-mode = false
 
 [tool.poetry.build]
@@ -19,11 +24,12 @@ catena-cdk-package = {git = "https://github.com/catenaclearing/catena-cdk-packag
 optional = true
 
 [tool.poetry.group.lint.dependencies]
-black = "^24.4.2"                                 # Python style checks
-commitizen = "^4.1.1"                             # Check commit messages
-pre-commit = "^4.1.0"                             # Runs a pipeline before commiting code
-yamllint = "^1.35.1"                              # Linter for YAML files
-ruff = "^0.9.4"                                   # Python linter
+ruff = "^0.15.9"                                  # Linter and formatter
+commitizen = "^4.13.9"                            # Check commit messages
+yamllint = "^1.38.0"                              # Linter for YAML files
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^4.5.1"                             # Runs a pipeline before committing code
 
 [tool.poetry.group.test]
 optional = true
@@ -42,25 +48,6 @@ checkov = "^3.2.361"
 [build-system]
 build-backend = "poetry.core.masonry.api"
 requires = ["poetry-core>=1.5.0"]
-
-
-[tool.black]
-extend-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.venv
-  | \.env
-  | cdk.out
-  | \.vscode
-  | build
-  | dist
-  | \.mypy_cache
-)\
-'''
-include = '\.pyi?$'
-line-length = 135
-target-version = ['py311']
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -101,12 +88,12 @@ ignore = [
   "D104", # Missing docstring in public package
   "ANN003", # Missing type annotation for **kwargs
   "ANN002", # Missing type annotation for **args
-  "ANN101", # Missing type annotation for self in method
-  "ANN1", # Missing type annotation for self in methot or cls method
+  "ANN1", # Missing type annotation for self in method or cls method
   "ANN401", # Dynamically typed expressions (typing.Any) are disallowed
   "A002", # Argument `id` is shadowing a Python builtin
   "F821", # Undefined name
   "FIX002", # Line contains TODO, consider resolving the issue
+  "COM812", # We don't need this rule because ruff formatting will handle this for us
 ]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
@@ -132,7 +119,6 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
@@ -159,7 +145,4 @@ omit = ["*/tests/*", "*/__init__.py", "*/*config.py"]    # Remove test files fro
 
 [tool.commitizen]
 tag_format = "v$version"
-version = "0.9.9"
-version_files = [
-  "pyproject.toml:version",
-]
+version_provider = "pep621"
