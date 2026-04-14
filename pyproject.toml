@@ -148,7 +148,6 @@ addopts = """
   --ignore=cdk.out
   --ignore=database
 """
-asyncio_default_fixture_loop_scope = "function"
 minversion = "8.3"
 
 [tool.coverage.run]
