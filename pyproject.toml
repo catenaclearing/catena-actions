@@ -5,7 +5,7 @@ authors = [{ name = "Andre Sionek", email = "andre.sionek@catenaclearing.io" }]
 description = "GitHub Actions and composite actions used by Catena"
 keywords = ["github", "actions", "cicd", "pipeline", "github actions"]
 readme = "README.md"
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.12,<4.0"
 dynamic = ["dependencies"]
 urls = { Homepage = "https://catenaclearing.io" }
 
@@ -16,7 +16,7 @@ package-mode = false
 generate-setup-file = false
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.12"
 aws-cdk-lib = "^2.177.0"
 catena-cdk-package = {git = "https://github.com/catenaclearing/catena-cdk-package", rev = "0"}
 
@@ -24,7 +24,7 @@ catena-cdk-package = {git = "https://github.com/catenaclearing/catena-cdk-packag
 optional = true
 
 [tool.poetry.group.lint.dependencies]
-ruff = "^0.15.9"                                  # Linter and formatter
+ruff = "^0.15.10"                                 # Linter and formatter
 commitizen = "^4.13.9"                            # Check commit messages
 yamllint = "^1.38.0"                              # Linter for YAML files
 
@@ -38,16 +38,15 @@ optional = true
 pytest = "^8.3.4"
 pytest-cov = "^6.0.0"
 
-
 [tool.poetry.group.checkov]
 optional = true
 
 [tool.poetry.group.checkov.dependencies]
-checkov = "^3.2.361"
+checkov = "^3.2.362"
 
 [build-system]
 build-backend = "poetry.core.masonry.api"
-requires = ["poetry-core>=1.5.0"]
+requires = ["poetry-core>=2.3.4"]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -66,12 +65,9 @@ exclude = [
     "**/cdk.out",
 ]
 
-# Same as Black.
 line-length = 135
 indent-width = 4
-
-# Assume Python 3.11
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["ALL"]

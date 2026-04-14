@@ -25,6 +25,15 @@ install: ## Install the project dependencies and pre-commit using Poetry.
 update: ## Update the project and all resolvers dependencies using Poetry.
 	poetry update --with lint,test,checkov,dev
 
+.PHONY: lock
+lock: ## Regenerate the Poetry lock files
+	@poetry lock
+
+.PHONY: fix-lock
+fix-lock: ## Regenerate and stage the Poetry lock files
+	@poetry lock --regenerate
+	@git add poetry.lock
+
 .PHONY: test
 test: ## Run tests
 	poetry run python -m pytest
