@@ -1,3 +1,9 @@
+## v0.11.0 (2026-04-14)
+
+### Feat
+
+- add support for lock/fix-lock (and update some deps)
+
 ## v0.10.0 (2026-04-08)
 
 ### Feat
