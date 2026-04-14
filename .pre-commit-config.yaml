@@ -24,13 +24,13 @@ repos:
         entry: ghcr.io/hadolint/hadolint hadolint
 
   - repo: https://github.com/python-poetry/poetry
-    rev: "2.3.3"
+    rev: "2.3.4"
     hooks:
       - id: poetry-check
         args: ["--lock"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.15.9"
+    rev: "v0.15.10"
     hooks:
       - id: ruff-check
         args: [--no-fix, --config=pyproject.toml]
