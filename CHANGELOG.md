@@ -1,3 +1,9 @@
+## v0.11.1 (2026-04-14)
+
+### Fix
+
+- consolidate configuration files
+
 ## v0.11.0 (2026-04-14)
 
 ### Feat
