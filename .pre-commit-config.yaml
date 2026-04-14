@@ -35,7 +35,7 @@ repos:
       - id: ruff-check
         args: [--no-fix, --config=pyproject.toml]
       - id: ruff-format
-        args: [--check]
+        args: [--check, --config=pyproject.toml]
 
   - repo: https://github.com/adrienverge/yamllint
     rev: "v1.38.0"
@@ -52,7 +52,7 @@ repos:
     hooks:
       - id: test
         name: Run Tests
-        entry: poetry run python -m pytest
+        entry: make test
         pass_filenames: false
         language: system
         stages: [pre-push]
