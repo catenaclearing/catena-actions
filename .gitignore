@@ -1,83 +1,91 @@
-node_modules/
-coverage/
+# Editor & Tools
+## VSCode
+.vscode/
 
-# IntelliJ/PyCharm
-out/
+## IntelliJ / PyCharm
 .idea/
 .idea_modules/
+out/
 *.iws
 
-# Node
-/.pnp
-.pnp.js
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+## Vim
+*.swp
 
-# Local environment
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.venv/
-env/
-venv/
-ENV/
-[Bb]in
-[Ii]nclude
-[Ll]ib
-[Ll]ib64
-[Ll]ocal
-[Ss]cripts
-pyvenv.cfg
-pip-selfcheck.json
-
-# macOS
-.DS_Store
-._*
+## AI & Agents
+.codex-home/
 
 # Python
+## Bytecode & Native Extensions
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+## Environment
+.env
+.venv/
+
+## Build
 build/
 dist/
-downloads/
-eggs/
-.eggs/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-htmlcov/
+
+## Test & Coverage
+.cache/
 .coverage
 .coverage.*
-.cache
-coverage.xml
-*.cover
-*.py,cover
 .hypothesis/
 .pytest_cache/
 cover/
-*.log
+coverage/
+coverage.xml
 docs/_build/
-target/
-__pypackages__/
+htmlcov/
+*.cover
+*.py,cover
 
-# Type checking
-.mypy_cache/
+## Type Checking & Lint
 .dmypy.json
+.mypy_cache/
 dmypy.json
+.ruff_cache/
+
+## Logs
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Node.js
+## Dependencies
+node_modules/
+
+## Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # AWS CDK
-.cdk.staging
-cdk.out
+.cdk.staging/
+cdk.out/
 
-*.swp
+# Build Outputs
+target/
+
+# macOS
+## macOS
+.DS_Store
+._*
+.AppleDB
+.AppleDesktop
+.AppleDouble
+.DocumentRevisions-V100
+.LSOverride
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.apdisk
+.com.apple.timemachine.donotpresent
+.fseventsd
+Icon
+Network Trash Folder
+Temporary Items

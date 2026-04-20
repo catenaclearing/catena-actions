@@ -2,7 +2,9 @@
 extends: default
 ignore: |
   .venv/
+  .cache/
   **/.venv/
+  .codex-home/
   node_modules/
   **/node_modules/
   cdk.out/
