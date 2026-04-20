@@ -1,3 +1,9 @@
+## 0.12.0 (2026-04-20)
+
+### Fix
+
+- last adjustments to keep consistency
+
 ## v0.11.1 (2026-04-14)
 
 ### Fix
