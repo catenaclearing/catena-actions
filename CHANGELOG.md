@@ -1,3 +1,9 @@
+## 0.12.1 (2026-05-05)
+
+### Fix
+
+- apply latest adjustments to Makefiles/pyprojects
+
 ## 0.12.0 (2026-04-20)
 
 ### Fix
