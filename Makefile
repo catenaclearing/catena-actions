@@ -5,17 +5,10 @@ PROJECTS :=
 .DEFAULT_GOAL := help
 
 define run_in_projects
-	@failed_projects=""; \
 	for project in $(PROJECTS); do \
 		echo "Running '$@' in $$project"; \
-		if ! $(MAKE) -C "$$project" $@ $(MAKEOVERRIDES); then \
-			failed_projects="$$failed_projects $$project"; \
-		fi; \
-	done; \
-	if [ -n "$$failed_projects" ]; then \
-		echo "Target '$@' failed in projects:$$failed_projects"; \
-		exit 1; \
-	fi
+		$(MAKE) -C "$$project" $@ $(MAKEOVERRIDES) || exit $$?; \
+	done;
 endef
 
 .PHONY: help
