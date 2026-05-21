@@ -1,3 +1,9 @@
+## 0.12.2 (2026-05-21)
+
+### Fix
+
+- **TECH-4899**: Use system git client to avoid dulwich issues
+
 ## 0.12.1 (2026-05-05)
 
 ### Fix
