@@ -11,7 +11,7 @@ inputs:
   poetry_version:
     description: Poetry version
     required: false
-    default: '2.3.3'
+    default: '2.4.1'
 
   machine_user_pat:
     description: Github Catena Machine User Personal Access Token (PAT)
@@ -59,6 +59,10 @@ runs:
         key: >-
           venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
           ${{ hashFiles(format('{0}/poetry.lock', inputs.directory)) }}
+
+    - name: Use system git client to avoid dulwich issues
+      shell: bash
+      run: poetry config system-git-client true
 
     - name: Install Dependencies
       if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
