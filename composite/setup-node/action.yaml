@@ -6,7 +6,7 @@ inputs:
   node_version:
     description: Node version
     required: false
-    default: '22'
+    default: '24'
 
   machine_user_pat:
     description: Github Catena Machine User Personal Access Token (PAT)
