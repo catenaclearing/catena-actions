@@ -24,8 +24,10 @@ runs:
 
     - name: Configure git PAT to access our private repositories
       shell: bash
+      env:
+        MACHINE_USER_PAT: ${{ inputs.machine_user_pat }}
       run: |
-        git config --global url.https://${{ inputs.machine_user_pat }}@github.com/.insteadOf https://github.com/
+        git config --global url."https://$MACHINE_USER_PAT@github.com/".insteadOf "https://github.com/"
 
     - name: Install Node.js
       id: install-node

@@ -1,0 +1,23 @@
+---
+name: SAST (Semgrep) — Scheduled
+# Weekly full-repo Semgrep scan + on-demand runs. Produces the SARIF/JSON
+# evidence artifact for Mastery control CC8 (PR-time scanning lives in
+# status-checks.yaml). Ruleset is defined once in the sast-semgrep composite.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'      # Mondays 07:00 UTC
+  workflow_dispatch:          # manual runs (evidence on demand)
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: SAST (Semgrep)
+        uses: ./composite/sast-semgrep

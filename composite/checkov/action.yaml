@@ -22,8 +22,10 @@ runs:
 
     - name: Install AWS CDK
       shell: bash
+      env:
+        CDK_VERSION: ${{ inputs.cdk_version }}
       run: |
-        npm install -g aws-cdk@${{ inputs.cdk_version }}
+        npm install -g "aws-cdk@$CDK_VERSION"
 
     - name: Synthezise CDK templates
       shell: bash

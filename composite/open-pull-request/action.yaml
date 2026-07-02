@@ -26,16 +26,20 @@ runs:
       continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
+        INPUT_TITLE: ${{ inputs.title }}
+        REF_NAME: ${{ github.ref_name }}
+        ACTION_PATH: ${{ github.action_path }}
+        TEMPLATE_FILE: ${{ inputs.template_file }}
       run: |
         # Fallback to github.ref_name if inputs.title is empty
-        if [ -z "${{ inputs.title }}" ]; then
-          PR_TITLE="${{ github.ref_name }}"
+        if [ -z "$INPUT_TITLE" ]; then
+          PR_TITLE="$REF_NAME"
         else
-          PR_TITLE="${{ inputs.title }}"
+          PR_TITLE="$INPUT_TITLE"
         fi
 
         gh pr create \
           --title "$PR_TITLE" \
-          --body-file "${{ github.action_path }}/templates/${{ inputs.template_file }}" \
+          --body-file "$ACTION_PATH/templates/$TEMPLATE_FILE" \
           --base main \
           --draft
