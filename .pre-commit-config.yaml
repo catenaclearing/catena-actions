@@ -70,3 +70,21 @@ repos:
         pass_filenames: false
         language: system
         stages: [pre-push]
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.168.0
+    hooks:
+      - id: semgrep
+        name: Semgrep SAST
+        args:
+          - scan
+          - --config=p/security-audit
+          - --config=p/secrets
+          - --config=p/owasp-top-ten
+          - --config=p/python
+          - --exclude-rule=yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+          - --error
+          - --severity=ERROR
+          - --metrics=off
+          - --disable-version-check
+        pass_filenames: false
+        stages: [pre-push]

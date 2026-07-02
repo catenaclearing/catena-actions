@@ -1,0 +1,143 @@
+---
+name: SAST (Semgrep)
+description: >-
+  Run Semgrep Community Edition SAST over the repository and upload the
+  SARIF + JSON results as a retained artifact (audit evidence for Mastery
+  control CC8). Uses Semgrep OSS — no SEMGREP_APP_TOKEN required.
+
+# NOTE: `permissions`, `on:` triggers and the job definition live in the
+# calling workflow, not here. A minimal caller looks like:
+#
+#   permissions:
+#     contents: read
+#   jobs:
+#     sast:
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: catenaclearing/catena-actions/composite/sast-semgrep@v0
+
+inputs:
+  python_version:
+    description: Python version used to install and run Semgrep.
+    required: false
+    default: '3.12'
+
+  semgrep_version:
+    description: >-
+      Pin a specific Semgrep version (e.g. 1.168.0). Leave empty to install
+      the latest release.
+    required: false
+    default: ''
+
+  rulesets:
+    description: >-
+      Space- or newline-separated Semgrep configs/rulesets to scan with. Each
+      value becomes a `--config` flag.
+    required: false
+    default: |
+      p/security-audit
+      p/secrets
+      p/owasp-top-ten
+      p/python
+
+  exclude_rules:
+    description: >-
+      Space- or newline-separated rule IDs to exclude. Each value becomes an
+      `--exclude-rule` flag.
+    required: false
+    default: >-
+      yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+
+  severity:
+    description: >-
+      Minimum severity to report/fail on (ERROR, WARNING, or INFO). Leave empty
+      to include all severities.
+    required: false
+    default: ERROR
+
+  fail_on_error:
+    description: >-
+      When 'true', pass `--error` so the job FAILS on findings at or above
+      `severity` (use as a required PR check). Set 'false' to report without
+      failing while triaging the backlog.
+    required: false
+    default: 'true'
+
+  upload_artifact:
+    description: Upload the SARIF + JSON results as a workflow artifact.
+    required: false
+    default: 'true'
+
+  artifact_name:
+    description: Name of the uploaded results artifact.
+    required: false
+    default: semgrep-results
+
+  retention_days:
+    description: How long to retain the results artifact (audit evidence).
+    required: false
+    default: '90'
+
+outputs:
+  sarif_file:
+    description: Path to the generated SARIF report.
+    value: semgrep.sarif
+  json_file:
+    description: Path to the generated JSON report.
+    value: semgrep.json
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install Semgrep (Community Edition)
+      shell: bash
+      env:
+        SEMGREP_VERSION: ${{ inputs.semgrep_version }}
+      run: |
+        if [ -n "$SEMGREP_VERSION" ]; then
+          pip install --upgrade "semgrep==$SEMGREP_VERSION"
+        else
+          pip install --upgrade semgrep
+        fi
+
+    - name: Run Semgrep scan
+      shell: bash
+      env:
+        RULESETS: ${{ inputs.rulesets }}
+        EXCLUDE_RULES: ${{ inputs.exclude_rules }}
+        SEVERITY: ${{ inputs.severity }}
+        FAIL_ON_ERROR: ${{ inputs.fail_on_error }}
+      run: |
+        args=()
+        for cfg in $RULESETS; do
+          args+=(--config "$cfg")
+        done
+        for rule in $EXCLUDE_RULES; do
+          args+=(--exclude-rule "$rule")
+        done
+        if [ -n "$SEVERITY" ]; then
+          args+=(--severity "$SEVERITY")
+        fi
+        if [ "$FAIL_ON_ERROR" = "true" ]; then
+          args+=(--error)
+        fi
+        semgrep scan \
+          "${args[@]}" \
+          --sarif-output semgrep.sarif \
+          --json-output semgrep.json \
+          --metrics off
+
+    - name: Upload Semgrep results (evidence artifact)
+      if: ${{ always() && inputs.upload_artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: |
+          semgrep.sarif
+          semgrep.json
+        retention-days: ${{ inputs.retention_days }}

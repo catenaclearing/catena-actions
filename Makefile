@@ -75,3 +75,7 @@ checkov: test ## Run Checkov against IAC code
 checkov-baseline: test ## Run checkov and create a new baseline for future checks
 	@poetry run checkov --config-file .checkov --create-baseline --soft-fail
 	@mv cdk.out/.checkov.baseline .checkov.baseline
+
+.PHONY: sast
+sast: ## Run Semgrep SAST scan (same rules as CI)
+	@poetry run pre-commit run semgrep --all-files --hook-stage pre-push

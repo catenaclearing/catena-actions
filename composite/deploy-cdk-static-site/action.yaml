@@ -54,7 +54,9 @@ runs:
       shell: bash
       run: |
         source .venv/bin/activate
-        npx -y aws-cdk@${{ inputs.cdk_version }} deploy ${{ inputs.stack_name }} --force
+        npx -y "aws-cdk@$CDK_VERSION" deploy "$STACK_NAME" --force
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
+        CDK_VERSION: ${{ inputs.cdk_version }}
+        STACK_NAME: ${{ inputs.stack_name }}

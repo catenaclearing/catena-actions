@@ -56,3 +56,15 @@ jobs:
         uses: catenaclearing/catena-actions/composite/checkov@main
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
+
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: semgrep-${{ github.workflow }}-${{ github.actor }}-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: SAST (Semgrep)
+        uses: ./composite/sast-semgrep
