@@ -85,7 +85,10 @@ runs:
         if STACK_JSON=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --output json 2>/dev/null); then
           OWNER=$(echo "$STACK_JSON" | jq -r --arg k "$OWNER_TAG" 'first(.Stacks[0].Tags[]? | select(.Key == $k) | .Value) // ""')
           if [ -n "$OWNER" ] && [ "$OWNER" != "$THIS_REPO" ]; then
-            echo "::error::Stack '$STACK_NAME' already exists and is owned by repo '$OWNER' (tag $OWNER_TAG). Refusing to deploy from '$THIS_REPO' — this would overwrite another service's stack. Choose a unique stack name in app.py and deploy.yaml."
+            MSG="Stack '$STACK_NAME' already exists and is owned by repo '$OWNER' (tag $OWNER_TAG)."
+            MSG="$MSG Refusing to deploy from '$THIS_REPO' - this would overwrite another service's stack."
+            MSG="$MSG Choose a unique stack name in app.py and deploy.yaml."
+            echo "::error::$MSG"
             exit 1
           fi
           if [ -z "$OWNER" ]; then
