@@ -1,3 +1,9 @@
+## 0.14.2 (2026-07-15)
+
+### Fix
+
+- **sast-semgrep**: bump actions/upload-artifact v4 -> v6
+
 ## 0.14.1 (2026-07-10)
 
 ### Fix
