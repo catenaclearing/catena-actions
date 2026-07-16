@@ -76,6 +76,49 @@ runs:
         role-session-name: ${{ github.event.repository.name }}-${{ github.actor }}
         aws-region: ${{ inputs.aws_region }}
 
+    - name: Guard against stack-name collision
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$DIRECTORY"
+        source .venv/bin/activate
+        OWNER_TAG="cost:repo"
+        # Owner value this deploy would apply, read from the synthesized template so we
+        # compare like-for-like against the deployed stack's own tag. We deliberately do
+        # NOT use the repo name: cost:repo is not guaranteed to equal the repo (e.g.
+        # catena-dashboard tags cost:repo=telematics-dashboard-service), so comparing to
+        # the repo name would falsely block that service from deploying to its own stack.
+        npx -y "aws-cdk@$CDK_VERSION" synth "$STACK_NAME" --quiet --output .cdk-guard-out
+        TEMPLATE=".cdk-guard-out/$STACK_NAME.template.json"
+        MINE=$(jq -r --arg k "$OWNER_TAG" 'first(.. | objects | select(.Key? == $k) | .Value) // ""' "$TEMPLATE")
+        if [ -z "$MINE" ]; then
+          echo "::warning::Could not read '$OWNER_TAG' from the synthesized template; skipping ownership check."
+          exit 0
+        fi
+        if STACK_JSON=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --output json 2>/dev/null); then
+          OWNER=$(echo "$STACK_JSON" | jq -r --arg k "$OWNER_TAG" 'first(.Stacks[0].Tags[]? | select(.Key == $k) | .Value) // ""')
+          if [ -z "$OWNER" ]; then
+            echo "::warning::Stack '$STACK_NAME' exists but has no '$OWNER_TAG' tag; cannot verify ownership. Proceeding."
+          elif [ "$OWNER" != "$MINE" ]; then
+            MSG="Stack '$STACK_NAME' already exists and is owned by '$OWNER' (tag $OWNER_TAG)."
+            MSG="$MSG This deploy is owned by '$MINE' - refusing to overwrite another service's stack."
+            MSG="$MSG Choose a unique stack name in app.py and deploy.yaml."
+            echo "::error::$MSG"
+            exit 1
+          else
+            echo "Stack '$STACK_NAME' is owned by '$OWNER' (matches this deploy). Safe to update."
+          fi
+        else
+          echo "Stack '$STACK_NAME' does not exist yet. Safe to create."
+        fi
+      env:
+        STACK_NAME: ${{ inputs.stack_name }}
+        DIRECTORY: ${{ inputs.directory }}
+        CDK_VERSION: ${{ inputs.cdk_version }}
+        GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
+        DOCKER_BUILDKIT: 1
+        BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+
     - name: CDK Deploy
       shell: bash
       run: |
