@@ -39,9 +39,29 @@ inputs:
     required: false
     default: "false"
 
+  free_disk_space:
+    description: >-
+      Remove unused preinstalled toolchains (.NET, Android SDK, GHC, CodeQL), disable the
+      runner's swap file, and prune dangling Docker images before deploying. GitHub-hosted
+      ubuntu-latest runners only have ~14GB free, which multi-image Docker builds (monorepos
+      with several Lambda/ECS image assets) can exhaust. Set to "false" to skip, e.g. on
+      self-hosted runners where these paths/sudo don't apply.
+    required: false
+    default: "true"
+
 runs:
   using: composite
   steps:
+    - name: Free up disk space
+      if: inputs.free_disk_space == 'true'
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+        sudo swapoff -a || true
+        sudo rm -f /mnt/swapfile || true
+        docker image prune -af || true
+        df -h /
+
     - name: Set Up Environment and load Cached Dependencies
       uses: catenaclearing/catena-actions/composite/setup-python@v0
       with:
