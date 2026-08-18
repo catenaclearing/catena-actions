@@ -1,3 +1,18 @@
+## 0.14.2 (2026-07-15)
+
+### Fix
+
+- **sast-semgrep**: bump actions/upload-artifact v4 -> v6
+
+## 0.14.1 (2026-07-10)
+
+### Fix
+
+- **plat-256**: bump actions/checkout to v7
+- **plat-256**: bump actions/checkout to v7
+- **plat-256**: bump actions/checkout to v7
+- **plat-256**: bump actions/checkout to v7
+
 ## 0.14.0 (2026-07-02)
 
 ### Feat
