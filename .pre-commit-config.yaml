@@ -21,7 +21,7 @@ repos:
       - id: hadolint-docker
         language: docker_image
         types: ["dockerfile"]
-        entry: ghcr.io/hadolint/hadolint hadolint
+        entry: ghcr.io/hadolint/hadolint:v2.12.0 hadolint
 
   - repo: https://github.com/python-poetry/poetry
     rev: "2.3.4"
