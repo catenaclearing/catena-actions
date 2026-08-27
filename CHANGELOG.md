@@ -1,3 +1,9 @@
+## 0.14.3 (2026-08-27)
+
+### Fix
+
+- pin hadolint image and silence DL3064 false positive on release Dockerfile [PLAT-247]
+
 ## 0.14.2 (2026-07-15)
 
 ### Fix
