@@ -1,3 +1,15 @@
+## 0.15.0 (2026-08-27)
+
+### Feat
+
+- track stack ownership via catena:managed-by tag to block cross-service overwrites [PLAT-247]
+- guard deploy-cdk against foreign stack-name collisions [PLAT-247]
+
+### Fix
+
+- fail closed on describe-stacks errors, drop jq dependency [PLAT-247]
+- compare stack ownership like-for-like on cost:repo, not repo name [PLAT-247]
+
 ## 0.14.3 (2026-08-27)
 
 ### Fix
