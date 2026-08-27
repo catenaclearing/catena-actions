@@ -1,6 +1,11 @@
 ---
 name: Deploy CDK Stack
-description: Install AWS CDK, the project dependencies and deploy the CDK stack.
+description: >-
+  Install AWS CDK and the project dependencies, then deploy the CDK stack.
+  Before deploying, it checks the target stack's "catena:managed-by" tag and
+  fails if the stack already exists but is owned by a different repo, so a new
+  service can't overwrite another service's stack that happens to share the same
+  name. The deploy then stamps that tag so ownership is always recorded.
 
 inputs:
   role_to_assume:
@@ -36,6 +41,15 @@ inputs:
 
   exclusively:
     description: Deploy only the specified stack, without its dependencies.
+    required: false
+    default: "false"
+
+  enforce_ownership_tag:
+    description: >-
+      When "true", also fail if the target stack already exists but has no
+      "catena:managed-by" tag (owner can't be confirmed). Default "false" warns
+      and proceeds, then stamps the tag, so legacy stacks deployed before this
+      guard existed don't block deploys during rollout.
     required: false
     default: "false"
 
@@ -76,6 +90,59 @@ runs:
         role-session-name: ${{ github.event.repository.name }}-${{ github.actor }}
         aws-region: ${{ inputs.aws_region }}
 
+    - name: Guard against overwriting another service's stack
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Ownership is tracked by a stack-level tag that the CDK Deploy step below
+        # stamps on every deploy. We read it back here and compare it to this repo.
+        # The tag VALUE is the repo, which is unique per service, so this works even
+        # though all services are generated from the same template and therefore have
+        # near-identical resource names (which is why comparing resources or diffs
+        # would not tell two services apart).
+        OWNER_TAG="catena:managed-by"
+        # describe-stacks fails if the stack doesn't exist (safe to create) but ALSO on
+        # real errors (AccessDenied, throttling, wrong region). Tell them apart: treating
+        # every failure as "no stack" would silently disable this guard on a transient
+        # error, so fail closed on anything other than a genuine "does not exist".
+        ERR_FILE="${RUNNER_TEMP:-/tmp}/deploy-cdk-guard-err.txt"
+        if ! OWNER=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Tags[?Key=='$OWNER_TAG'].Value | [0]" --output text 2>"$ERR_FILE"); then
+          if grep -q "does not exist" "$ERR_FILE"; then
+            echo "Stack '$STACK_NAME' does not exist yet. Safe to create."
+            exit 0
+          fi
+          echo "::error::Could not check ownership of stack '$STACK_NAME'; refusing to deploy blindly."
+          cat "$ERR_FILE" >&2
+          exit 1
+        fi
+        # AWS CLI prints the literal "None" when the stack exists but has no such tag.
+        if [ "$OWNER" = "None" ]; then OWNER=""; fi
+        if [ -z "$OWNER" ]; then
+          if [ "$ENFORCE_OWNERSHIP_TAG" = "true" ]; then
+            MSG="Stack '$STACK_NAME' exists but has no '$OWNER_TAG' tag; owner cannot be confirmed."
+            MSG="$MSG enforce_ownership_tag is on. Backfill the tag on the stack, then retry."
+            echo "::error::$MSG"
+            exit 1
+          fi
+          MSG="Stack '$STACK_NAME' exists but has no '$OWNER_TAG' tag (legacy stack)."
+          MSG="$MSG Cannot confirm owner; proceeding. This deploy will stamp it with '$THIS_REPO'."
+          echo "::warning::$MSG"
+          exit 0
+        fi
+        if [ "$OWNER" != "$THIS_REPO" ]; then
+          MSG="Stack '$STACK_NAME' already exists and is managed by '$OWNER'."
+          MSG="$MSG This deploy is from '$THIS_REPO' - refusing to overwrite another service's stack."
+          MSG="$MSG Use a unique stack name in app.py and deploy.yaml."
+          echo "::error::$MSG"
+          exit 1
+        fi
+        echo "Stack '$STACK_NAME' is managed by '$OWNER' (this repo). Safe to update."
+      env:
+        STACK_NAME: ${{ inputs.stack_name }}
+        THIS_REPO: ${{ github.repository }}
+        ENFORCE_OWNERSHIP_TAG: ${{ inputs.enforce_ownership_tag }}
+
     - name: CDK Deploy
       shell: bash
       run: |
@@ -86,7 +153,7 @@ runs:
           EXCLUSIVELY="--exclusively"
         fi
         npx -y "aws-cdk@$CDK_VERSION" deploy "$STACK_NAME" \
-          --force $EXCLUSIVELY
+          --force --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
@@ -94,4 +161,5 @@ runs:
         DIRECTORY: ${{ inputs.directory }}
         CDK_VERSION: ${{ inputs.cdk_version }}
         STACK_NAME: ${{ inputs.stack_name }}
+        THIS_REPO: ${{ github.repository }}
         EXCLUSIVELY_FLAG: ${{ inputs.exclusively }}
