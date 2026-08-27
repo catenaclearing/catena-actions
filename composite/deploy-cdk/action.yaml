@@ -101,11 +101,23 @@ runs:
         # near-identical resource names (which is why comparing resources or diffs
         # would not tell two services apart).
         OWNER_TAG="catena:managed-by"
-        if ! STACK_JSON=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --output json 2>/dev/null); then
-          echo "Stack '$STACK_NAME' does not exist yet. Safe to create."
-          exit 0
+        # describe-stacks fails if the stack doesn't exist (safe to create) but ALSO on
+        # real errors (AccessDenied, throttling, wrong region). Tell them apart: treating
+        # every failure as "no stack" would silently disable this guard on a transient
+        # error, so fail closed on anything other than a genuine "does not exist".
+        ERR_FILE="${RUNNER_TEMP:-/tmp}/deploy-cdk-guard-err.txt"
+        if ! OWNER=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Tags[?Key=='$OWNER_TAG'].Value | [0]" --output text 2>"$ERR_FILE"); then
+          if grep -q "does not exist" "$ERR_FILE"; then
+            echo "Stack '$STACK_NAME' does not exist yet. Safe to create."
+            exit 0
+          fi
+          echo "::error::Could not check ownership of stack '$STACK_NAME'; refusing to deploy blindly."
+          cat "$ERR_FILE" >&2
+          exit 1
         fi
-        OWNER=$(echo "$STACK_JSON" | jq -r --arg k "$OWNER_TAG" 'first(.Stacks[0].Tags[]? | select(.Key == $k) | .Value) // ""')
+        # AWS CLI prints the literal "None" when the stack exists but has no such tag.
+        if [ "$OWNER" = "None" ]; then OWNER=""; fi
         if [ -z "$OWNER" ]; then
           if [ "$ENFORCE_OWNERSHIP_TAG" = "true" ]; then
             MSG="Stack '$STACK_NAME' exists but has no '$OWNER_TAG' tag; owner cannot be confirmed."
