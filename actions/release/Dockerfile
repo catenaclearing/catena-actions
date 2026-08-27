@@ -1,6 +1,8 @@
 FROM python:3.13-slim-bookworm
 
 # Set the version of gh-token to install
+# Version string, not a secret despite the "TOKEN" in the name.
+# hadolint ignore=DL3064
 ENV GHTOKEN_VERSION=v2.0.2
 
 # Install Github Cli
