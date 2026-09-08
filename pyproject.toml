@@ -1,6 +1,6 @@
 [project]
 name = "catena-actions"
-version = "0.15.0"
+version = "0.15.1"
 description = "GitHub Actions and composite actions used by Catena"
 authors = [{ name = "Catena", email = "tech@catenaclearing.io" }]
 readme = "README.md"

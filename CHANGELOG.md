@@ -1,3 +1,15 @@
+## 0.15.1 (2026-09-08)
+
+### Fix
+
+- skip the toggle when already in the target state
+- fail fast when branch protection cannot be read
+- replace unmaintained branch-protection-bot with gh api calls
+
+### Refactor
+
+- name the no-HTTP-response case explicitly
+
 ## 0.15.0 (2026-08-27)
 
 ### Feat
