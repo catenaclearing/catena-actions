@@ -59,8 +59,13 @@ case "$protection_status" in
     echo "Branch '$BRANCH' has no classic branch protection, or the token cannot read it. Skipping."
     exit 0
     ;;
+  "")
+    echo "::error::No HTTP response when reading branch protection for '$REPO' branch '$BRANCH' (network or TLS failure)."
+    cat "$stderr_file" >&2
+    exit 1
+    ;;
   *)
-    echo "::error::Could not read branch protection for '$REPO' branch '$BRANCH' (HTTP ${protection_status:-unknown})."
+    echo "::error::Could not read branch protection for '$REPO' branch '$BRANCH' (HTTP $protection_status)."
     cat "$stderr_file" >&2
     exit 1
     ;;
