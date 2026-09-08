@@ -71,6 +71,24 @@ case "$protection_status" in
     ;;
 esac
 
+# Read the current value, so that the toggle is a no-op when the branch is
+# already in the target state. This also sidesteps any ambiguity about what
+# GitHub returns for a DELETE against an already-disabled enforce_admins: in
+# that case no write is issued at all. An unreadable or unexpected value falls
+# through to the write below, which is the safe default.
+current=$(gh api "repos/$REPO/branches/$BRANCH/protection" --jq '.enforce_admins.enabled' 2>"$stderr_file" || true)
+
+case "$ACTION:$current" in
+  enable:true)
+    echo "enforce_admins is already enabled on '$BRANCH'. Nothing to do."
+    exit 0
+    ;;
+  disable:false)
+    echo "enforce_admins is already disabled on '$BRANCH'. Nothing to do."
+    exit 0
+    ;;
+esac
+
 # Retry with the same exponential back-off the old action used, to ride out
 # transient API failures while protection is being toggled.
 for attempt in 0 1 2 3 4; do
