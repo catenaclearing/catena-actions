@@ -15,6 +15,7 @@
 set -e
 
 ACTION="${1:?usage: toggle-enforce-admins.sh enable|disable}"
+: "${GITHUB_TOKEN:?GITHUB_TOKEN is not set}"
 : "${REPO:?REPO is not set}"
 : "${BRANCH:?BRANCH is not set}"
 
@@ -27,13 +28,43 @@ case "$ACTION" in
     ;;
 esac
 
-# Match the old action's behaviour: an unprotected branch is a no-op rather than
-# a failure, so repos with no protection rules on their release branch still
-# release successfully.
-if ! gh api "repos/$REPO/branches/$BRANCH/protection" --silent 2>/dev/null; then
-  echo "Branch '$BRANCH' has no protection rules. Skipping."
-  exit 0
+stderr_file=$(mktemp)
+trap 'rm -f "$stderr_file"' EXIT
+
+# Fail loudly if the branch itself cannot be read, so that a mistyped `branch`
+# input is not mistaken below for "no protection configured".
+if ! gh api "repos/$REPO/branches/$BRANCH" --silent 2>"$stderr_file"; then
+  echo "::error::Could not read '$REPO' branch '$BRANCH'."
+  cat "$stderr_file" >&2
+  exit 1
 fi
+
+# Look up classic branch protection, capturing the HTTP status so that a genuine
+# 404 can be told apart from an auth, rate-limit or 5xx failure. Only the 404
+# means "this branch has no classic protection" and is safe to skip; skipping on
+# any other failure would be dangerous, because a silent skip on the re-enable
+# step would leave the branch unprotected.
+protection_status=$(
+  gh api "repos/$REPO/branches/$BRANCH/protection" --include --silent 2>"$stderr_file" |
+    sed -n '1s#^HTTP/[0-9.]\{1,\} \([0-9]\{3\}\).*#\1#p'
+)
+
+case "$protection_status" in
+  200)
+    ;;
+  404)
+    # Matches the old action's behaviour, so repos with no classic protection on
+    # their release branch still release successfully. Note that this endpoint
+    # also 404s for a token without admin on the repo.
+    echo "Branch '$BRANCH' has no classic branch protection, or the token cannot read it. Skipping."
+    exit 0
+    ;;
+  *)
+    echo "::error::Could not read branch protection for '$REPO' branch '$BRANCH' (HTTP ${protection_status:-unknown})."
+    cat "$stderr_file" >&2
+    exit 1
+    ;;
+esac
 
 # Retry with the same exponential back-off the old action used, to ride out
 # transient API failures while protection is being toggled.
