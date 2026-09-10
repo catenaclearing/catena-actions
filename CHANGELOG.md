@@ -1,3 +1,13 @@
+## 0.15.2 (2026-09-10)
+
+### Fix
+
+- count the request body without the here-string's added newline
+- prefix the quoted body so it cannot start with a runner command
+- keep the quoted spec body to one line
+- validate max_new_endpoints and quote the new spec on rejection
+- refuse to generate a changelog from a diff that is not a change
+
 ## 0.15.1 (2026-09-08)
 
 ### Fix
