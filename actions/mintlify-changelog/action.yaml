@@ -19,6 +19,15 @@ inputs:
     description: Path to the new/changed OpenAPI specification file (JSON or YAML)
     required: true
 
+  max_new_endpoints:
+    description: >-
+      Refuse the diff, rather than generate a changelog, when it reports more
+      new endpoints than this. A whole API surface reading as new means the
+      baseline is wrong, not that a release added it (ref FE-600). Raise it for
+      a genuine bulk release.
+    required: false
+    default: "40"
+
 runs:
   using: docker
   image: Dockerfile

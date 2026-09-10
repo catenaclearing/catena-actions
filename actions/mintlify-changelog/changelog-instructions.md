@@ -44,6 +44,49 @@ METHOD /path/to/endpoint
               - Type changed from '...' to '...'
 ```
 
+## Stop Conditions: When Not To Write A Changelog
+**CRITICAL**: A changelog entry records *a change*. Some diffs do not describe
+one, and for those the correct output is no entry and no pull request. Say what
+you found and stop — do not write an entry that describes the API instead.
+
+### 1. Nothing changed
+If the diff is `No changes`, or every difference it contains falls under
+"Ignore Infrastructure Changes" below, there is nothing to publish. Do not open
+a pull request to say so.
+
+### 2. The diff looks like a whole-surface baseline
+If the diff reports **most or all of an API's endpoints as new**, the baseline
+is almost certainly wrong rather than the release enormous. The baseline is
+fetched from the live API at build time, so an HTTP error, a truncated response
+or a fresh deployment target all produce an "old" spec with no endpoints — and
+every endpoint then reads as new.
+
+Treat these as signals that the baseline, not the API, is the thing that
+changed:
+
+- more than ~40 new endpoints in one diff
+- `### Deleted Endpoints: None` **and** `### Modified Endpoints: None` next to a
+  large `### New Endpoints: N` — a real release almost always modifies something,
+  whereas a diff against an empty baseline can only ever add
+- new endpoints spanning every functional area of the API at once
+
+**Action**: stop, and report that the baseline appears empty or truncated. Do
+not open a pull request. Six such changelogs were published as releases
+v2.53.0, v2.55.0, v2.58.0, v2.60.0, v2.61.0 and v2.64.0 before this rule
+existed; each claimed 65+ new endpoints on a day when the API did not change.
+
+### 3. The content belongs in the endpoint overview
+An API's full endpoint surface is documented on its overview page —
+`api-reference/changelogs/telematics-api-v2-overview.mdx` and its siblings —
+not in a release entry. If what you are about to write is a catalogue of what
+the API offers rather than what changed on this date, it belongs there, and the
+overview page already holds it.
+
+The docs repository enforces all three of these at merge: an entry naming more
+than 40 endpoints, or titled after an API launch, expansion or initial release,
+is refused by `.github/scripts/prepare-changelog-pr.py` and left for a human.
+An entry that would be refused is worse than no entry at all.
+
 ## Important: Ignore Infrastructure Changes
 **CRITICAL**: Ignore the following types of changes, as they are artifacts of the CI build process and do not represent actual API changes:
 
@@ -271,6 +314,11 @@ Always include:
 
 ## Version Detection
 
+The docs repository assigns the published version itself, from the highest one
+already released, and renames the entry to match. Pick the bump below so the
+*kind* of change is recorded correctly, but do not rely on the number you
+choose surviving — and never reuse a version that is already published.
+
 ### Extracting Current Version
 - Extract version from diff: `- "version": "old"` and `+ "version": "new"`
 - Use the current date for the release date in YYYY-MM-DD format
@@ -336,6 +384,9 @@ Before completing, verify the generated files meet these quality standards:
 - Links use correct relative paths
 
 ## Output Checklist
+- [ ] The diff describes an actual change — not `No changes`, not a
+      whole-surface baseline, not a catalogue of the existing API
+- [ ] Fewer than ~40 new endpoints; more than that means a wrong baseline
 - [ ] Correct versioning based on changes
 - [ ] Created new file: `api-reference/changelogs/v[X.Y.Z]-[YYYY-MM-DD].mdx`
 - [ ] Added `<Update>` entry to `api-reference/changelogs.mdx`
