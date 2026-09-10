@@ -65,10 +65,10 @@ Treat these as signals that the baseline, not the API, is the thing that
 changed:
 
 - more than ~40 new endpoints in one diff
+- `### Deleted Endpoints: None` **and** `### Modified Endpoints: None` next to a
+  large `### New Endpoints: N` — a real release almost always modifies something,
+  whereas a diff against an empty baseline can only ever add
 - new endpoints spanning every functional area of the API at once
-- the diff also reports the `info`, `servers`, `securitySchemes` and `tags`
-  sections as newly added
-- `openAPI: from: ""` — the baseline had no OpenAPI version at all
 
 **Action**: stop, and report that the baseline appears empty or truncated. Do
 not open a pull request. Six such changelogs were published as releases

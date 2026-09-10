@@ -73,13 +73,13 @@ info:
 paths: {}
 EMPTY
 
-# Collapsed to one line: these files can be HTTP error bodies, and a `::`
-# sequence at the start of a line in a step's output is read by the runner as a
-# workflow command. The single quotes keep the shell off the escapes; tr expands
-# them itself, so CR and LF are the characters matched, not backslash-r-n.
+# These files can be HTTP error bodies, and a `::` sequence at the start of a
+# line of step output is read by the runner as a workflow command. Newlines are
+# collapsed and a non-blank prefix added, because the body's own first bytes
+# could be `::` and leading whitespace may not survive the runner's parse. tr
+# expands the escapes itself; the single quotes only keep the shell off them.
 quote_head() {
-  head -c 400 "$1" | tr '\r\n' '  '
-  echo ""
+  printf 'body: %s\n' "$(head -c 400 "$1" | tr '\r\n' '  ')"
 }
 
 count_endpoints() {
