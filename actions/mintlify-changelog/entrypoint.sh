@@ -51,9 +51,10 @@ fi
 
 MAX_NEW_ENDPOINTS="${INPUT_MAX_NEW_ENDPOINTS:-40}"
 
-# Validated up front because `[[ ... -gt ... ]]` evaluates a non-numeric string
-# as 0, which would pass every diff — silently disabling the one guard a wrong
-# value is most likely to be reaching for.
+# Validated up front because `[[ ... -gt ... ]]` compares in an arithmetic
+# context, where an identifier-shaped value like "abc" is read as an unset
+# variable and silently becomes 0. The comparison then passes every diff,
+# disabling the one guard a wrong value is most likely reaching for.
 if [[ ! "${MAX_NEW_ENDPOINTS}" =~ ^[0-9]+$ ]]; then
   echo "✗ Error: max_new_endpoints must be a non-negative integer, got '${MAX_NEW_ENDPOINTS}'."
   exit 1
