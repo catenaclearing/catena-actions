@@ -168,7 +168,7 @@ echo ""
 echo "Creating Mintlify agent job to generate changelog..."
 # The instructions are static and long; logging them on every run buried the
 # one part of the payload that varies. The diff itself is printed above.
-echo "Request body: $(wc -c <<< "$REQUEST_BODY" | tr -d ' ') bytes" \
+echo "Request body: $(printf '%s' "$REQUEST_BODY" | wc -c | tr -d ' ') bytes" \
   "(instructions $(wc -c < "$LLM_INSTRUCTIONS_FILE" | tr -d ' '), diff $(wc -c < "$OPENAPI_DIFF_FILE" | tr -d ' '))"
 
 # Write request body to a temp file to avoid "Argument list too long" OS limit
