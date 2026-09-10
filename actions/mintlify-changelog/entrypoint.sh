@@ -73,6 +73,14 @@ info:
 paths: {}
 EMPTY
 
+# Collapsed to one line: these files can be HTTP error bodies, and a `::`
+# sequence at the start of a line in a step's output is read by the runner as a
+# workflow command.
+quote_head() {
+  head -c 400 "$1" | tr '\r\n' '  '
+  echo ""
+}
+
 count_endpoints() {
   oasdiff summary --format json "$EMPTY_SPEC" "$1" | jq '.details.endpoints.added // 0'
 }
@@ -92,14 +100,14 @@ if [[ "${old_endpoints}" -eq 0 ]]; then
   echo "✗ Error: the baseline at ${INPUT_OLD_OPENAPI_FILE} describes no endpoints."
   echo "  Every endpoint would read as new. Check how the baseline is obtained —"
   echo "  an HTTP error body parses as valid JSON but is not an API description."
-  head -c 400 "${INPUT_OLD_OPENAPI_FILE}"
+  quote_head "${INPUT_OLD_OPENAPI_FILE}"
   exit 1
 fi
 
 if [[ "${new_endpoints}" -eq 0 ]]; then
   echo "✗ Error: the new spec at ${INPUT_NEW_OPENAPI_FILE} describes no endpoints."
   echo "  Every endpoint would read as deleted. The spec build has probably failed."
-  head -c 400 "${INPUT_NEW_OPENAPI_FILE}"
+  quote_head "${INPUT_NEW_OPENAPI_FILE}"
   exit 1
 fi
 
