@@ -89,3 +89,6 @@ target/
 Icon
 Network Trash Folder
 Temporary Items
+
+# Written by actions/mintlify-changelog/entrypoint.sh when run outside its container
+actions/mintlify-changelog/oasdiff-output.txt
