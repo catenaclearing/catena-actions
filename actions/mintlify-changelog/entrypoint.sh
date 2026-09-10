@@ -51,6 +51,14 @@ fi
 
 MAX_NEW_ENDPOINTS="${INPUT_MAX_NEW_ENDPOINTS:-40}"
 
+# Validated up front because `[[ ... -gt ... ]]` evaluates a non-numeric string
+# as 0, which would pass every diff — silently disabling the one guard a wrong
+# value is most likely to be reaching for.
+if [[ ! "${MAX_NEW_ENDPOINTS}" =~ ^[0-9]+$ ]]; then
+  echo "✗ Error: max_new_endpoints must be a non-negative integer, got '${MAX_NEW_ENDPOINTS}'."
+  exit 1
+fi
+
 echo "Mintlify Project ID: ${INPUT_MINTLIFY_PROJECT_ID}"
 
 # A spec with no endpoints, so oasdiff can be used to count what a spec holds.
@@ -90,6 +98,7 @@ fi
 if [[ "${new_endpoints}" -eq 0 ]]; then
   echo "✗ Error: the new spec at ${INPUT_NEW_OPENAPI_FILE} describes no endpoints."
   echo "  Every endpoint would read as deleted. The spec build has probably failed."
+  head -c 400 "${INPUT_NEW_OPENAPI_FILE}"
   exit 1
 fi
 
