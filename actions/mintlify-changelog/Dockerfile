@@ -9,7 +9,9 @@ RUN apt-get update -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install oasdiff for OpenAPI 3.1 diff support
-ARG OASDIFF_VERSION=1.11.10
+# Pinned at or above 1.32.0: earlier builds model exclusiveMinimum as OpenAPI
+# 3.0's boolean and refuse any 3.1 spec that uses its numeric form (ref DP-622).
+ARG OASDIFF_VERSION=1.32.0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN curl -sSfL "https://github.com/Tufin/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz" \
     | tar -xz -C /usr/local/bin oasdiff \
