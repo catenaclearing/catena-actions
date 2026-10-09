@@ -149,6 +149,11 @@ that cannot be resolved fails the whole job; `continue-on-error` does not help).
    `git fetch --tags -f && git rev-parse origin/main v0`; the two must be the same commit.
 3. Only then merge the change to `composite/deploy-cdk`.
 
+Do not merge anything else to `main` while a release is running, either. The release (`actions/release`) fetches
+`main`, adds its `bump:` commit and then runs `git push origin HEAD:main --force`, so a commit merged in between is
+silently erased from `main` and its tag is orphaned. This is how the release process works for every repo that uses it,
+not something specific to this action; using `--force-with-lease` there would close it.
+
 ## Development
 
 This action has its own Node project; the repo's Python tooling does not run it.
