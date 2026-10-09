@@ -111,8 +111,10 @@ runs:
 
     # Dev environment lock (PLAT-473). Three steps, built so that nothing here can fail a deploy by accident:
     #   1. the gate decides, and can never fail (script exits 0, and continue-on-error as a second net);
-    #   2. the lock step is skipped unless the gate says yes, and runs with continue-on-error, so a failed image build
-    #      or a bug in the action lets the deploy go ahead (the lock is coordination, not a security control);
+    #   2. the lock step is skipped unless the gate says yes, and runs with continue-on-error, so a bug in the action or
+    #      an unreachable lock store lets the deploy go ahead (the lock is coordination, not a security control).
+    #      It is a JavaScript action on purpose: GitHub builds or pulls every Docker action in a job during job setup, where
+    #      this wiring cannot help, and this composite runs in every deploy, production included;
     #   3. only a deliberate block (dev is locked, mode enforce) stops the deploy, in the step below.
     - name: Decide whether this deploy takes the dev lock
       id: dev-lock-gate

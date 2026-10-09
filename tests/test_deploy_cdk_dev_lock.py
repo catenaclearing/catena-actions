@@ -54,8 +54,8 @@ def fake_aws_fixture(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def run_gate(tmp_path: Path, fake_aws: Path, **overrides: str | None) -> tuple[int, str | None]:
-    """Run the gate script; returns (exit code, the value written to is_dev_lock, or None if nothing was written)."""
+def run_gate_logged(tmp_path: Path, fake_aws: Path, **overrides: str | None) -> tuple[int, str | None, str]:
+    """Run the gate script; returns (exit code, the value written to is_dev_lock or None, what it printed)."""
     output = tmp_path / "github_output"
     env = {
         "PATH": f"{fake_aws}{os.pathsep}{os.environ['PATH']}",
@@ -71,7 +71,13 @@ def run_gate(tmp_path: Path, fake_aws: Path, **overrides: str | None) -> tuple[i
             env.pop(key, None)
     result = subprocess.run(["/bin/bash", str(GATE_SCRIPT)], env=env, capture_output=True, text=True, check=False)  # noqa: S603
     written = output.read_text().strip() if output.exists() else None
-    return result.returncode, written.removeprefix("is_dev_lock=") if written else None
+    return result.returncode, written.removeprefix("is_dev_lock=") if written else None, result.stdout
+
+
+def run_gate(tmp_path: Path, fake_aws: Path, **overrides: str | None) -> tuple[int, str | None]:
+    """Run the gate script; returns (exit code, the value written to is_dev_lock, or None if nothing was written)."""
+    code, value, _ = run_gate_logged(tmp_path, fake_aws, **overrides)
+    return code, value
 
 
 # --- the gate: only in-scope repos in the dev account -------------------------------------------------------------
@@ -120,6 +126,56 @@ def test_the_repo_has_to_match_an_entry_exactly(tmp_path, fake_aws, repo):
 def test_spaces_and_newlines_around_entries_are_ignored(tmp_path, fake_aws):
     messy = " catenaclearing/catena-platform ,\n  catenaclearing/telematics-data-service\n"
     assert run_gate(tmp_path, fake_aws, DEV_LOCK_REPOS=messy) == (0, "true")
+
+
+# --- the gate says why, so a rename or a typo cannot turn the lock off silently -----------------------------------
+
+
+def test_the_gate_says_it_is_using_the_lock(tmp_path, fake_aws):
+    _, value, log = run_gate_logged(tmp_path, fake_aws)
+    assert value == "true"
+    assert "dev lock: on" in log
+    assert "catenaclearing/telematics-data-service" in log
+
+
+def test_the_gate_says_when_the_repo_is_not_in_the_list(tmp_path, fake_aws):
+    """A renamed repo or a typo in dev_lock_repos would otherwise just stop locking without a trace."""
+    _, value, log = run_gate_logged(tmp_path, fake_aws, GITHUB_REPOSITORY="catenaclearing/telematics-data-service-renamed")
+    assert value == "false"
+    assert "dev lock: off" in log
+    assert "catenaclearing/telematics-data-service-renamed is not in dev_lock_repos" in log
+
+
+def test_the_gate_says_when_it_is_not_the_development_account(tmp_path, fake_aws):
+    _, value, log = run_gate_logged(tmp_path, fake_aws, FAKE_AWS_ACCOUNT=PROD)
+    assert value == "false"
+    assert "dev lock: off" in log
+    assert "not the development account" in log
+
+
+def test_the_gate_says_when_it_cannot_tell_which_account_it_is(tmp_path, fake_aws):
+    _, value, log = run_gate_logged(tmp_path, fake_aws, FAKE_AWS_FAIL="1")
+    assert value == "false"
+    assert "could not tell which AWS account" in log
+
+
+def test_the_gate_says_when_it_has_been_switched_off_by_a_blank_setting(tmp_path, fake_aws):
+    _, value, log = run_gate_logged(tmp_path, fake_aws, DEV_LOCK_REPOS="")
+    assert value == "false"
+    assert "dev_lock_repos or dev_lock_account_id is blank" in log
+
+
+def test_a_blank_account_setting_is_never_equal_to_a_failed_account_lookup(tmp_path, fake_aws):
+    """If `aws` fails the answer is empty; an empty setting must not be mistaken for a match."""
+    for name, answer in {"aws-fails": {"FAKE_AWS_FAIL": "1"}, "aws-answers-nothing": {"FAKE_AWS_ACCOUNT": ""}}.items():
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        assert run_gate(run_dir, fake_aws, DEV_LOCK_ACCOUNT_ID="", **answer) == (0, "false"), name
+
+
+def test_a_blank_repository_never_matches_an_empty_entry_in_the_list(tmp_path, fake_aws):
+    """`a/b,,c/d` has an empty entry; a blank GITHUB_REPOSITORY must not match it."""
+    assert run_gate(tmp_path, fake_aws, GITHUB_REPOSITORY="", DEV_LOCK_REPOS="a/b,,c/d") == (0, "false")
 
 
 # --- the gate can never fail a deploy ----------------------------------------------------------------------------
@@ -182,7 +238,7 @@ def test_the_gate_cannot_fail_the_job_and_runs_the_script_next_to_the_action():
 
 
 def test_the_lock_step_runs_only_when_the_gate_says_so_and_cannot_fail_the_job_by_itself():
-    """A failed image build or an action bug must not stop a deploy; only a deliberate block does, in the next step."""
+    """An action bug or an unreachable lock store must not stop a deploy; only a deliberate block does, in the next step."""
     lock = step("dev-lock")
     assert lock["if"] == "steps.dev-lock-gate.outputs.is_dev_lock == 'true'"
     assert lock["continue-on-error"] is True

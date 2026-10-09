@@ -94,6 +94,61 @@ and the next deploy will take the lock. The AWS credentials the post step uses a
 credentials, which expire after an hour by default: a job that runs longer than that cannot release the lock
 and leaves it to expire on its own.
 
+## Known limitations
+
+* **Acquisition is first come, first served** through the conditional write. Queue order is what the Slack bot
+  announces; it is not enforced by the lock.
+* **A job that outlives `ttl_minutes` can be overtaken**, and a job longer than an hour cannot release the lock at
+  all (its AWS session has expired), so the lock then expires on its own.
+* **A merge to main that goes ahead over a manual hold does not hold the lock itself.** If the hold ends while that
+  merge's deploy is still running, a PR deploy can start alongside it. A fix would be to take over the lock for the
+  duration and restore the hold afterwards; not done yet.
+* **Lock state is only as good as the table.** If the table is unreachable the action fails open (see above), so
+  concurrent dev deploys are possible again until it is fixed.
+
+## Testing a change on a branch (the canary)
+
+`deploy-cdk@v0` is a floating tag that moves on every release, so a change reaches every repo as soon as it merges.
+Test on a branch first, with a throwaway branch that is never merged. This repo's own `Deploy CDK` workflow deploys
+`DummyActions-Development` to the dev account, so it works as the canary. **Two things must change on the branch, not
+one**, or the test exercises nothing:
+
+1. In `composite/deploy-cdk/action.yaml`, change this action's `uses:` from `@v0` to the branch name.
+2. In `.github/workflows/deploy-cdk.yaml`, change `uses: .../composite/deploy-cdk@main` to the branch name too (the
+   workflow does not use the composite from the branch otherwise), and add
+   `dev_lock_repos: catenaclearing/catena-actions` under `with:`, since this repo is not in the default list.
+
+A test fails if the real branch ever pins this action to anything but `@v0`, which is what stops a canary pin from
+being merged by accident. It needs the `DevLock` stack and the `AllowDevLockTable` grant on `GitHubActionsDeployer`
+deployed to dev.
+
+| # | Run | Look for |
+|---|---|---|
+| 1 | A normal dev deploy | "dev lock: on" from the gate, then "Holding the dev lock" (not an `AccessDenied` or credentials warning: that would mean the AWS credentials did not reach the action). The lock item exists during the deploy and is gone after |
+| 2 | A deploy whose CDK step fails (the common case) | The lock is released anyway |
+| 3 | A job that is cancelled mid-deploy | The lock is released |
+| 4 | In `enforce` mode, a second deploy started while the first runs | The second goes red at "Stop the deploy, dev is locked", names the holder and gives a queue position; the first is unaffected |
+| 5 | Two deploys started at the same moment | Exactly one holder. This is the real DynamoDB check the emulator cannot make |
+| 6 | With no `CONFIG/mode` item, then set to `enforce`, then to `off` (commands above) | Behaves as report-only, then enforces, then does nothing, each without a release |
+| 7 | **A job that must not use the lock**: a production or management deploy, or a repo outside `dev_lock_repos` | "dev lock: off (...)" in the gate's log with the reason, and no lock calls anywhere |
+| 8 | The table is unreachable (point `table_name` at a name that does not exist) | A warning, and the deploy goes ahead |
+
+**Not exercisable from a PR:** a merge to main waiting for a CI deploy, or going ahead over a manual hold, because
+both depend on the push event on `refs/heads/main`. They are covered by the tests; watch the first real merges.
+
+## Releasing: merge order
+
+`deploy-cdk@v0` is a floating tag that the release workflow moves on every merge to `main` that bumps the version.
+This repo's own `Deploy CDK` workflow uses `deploy-cdk@main`, and `composite/deploy-cdk` refers to this action as
+`@v0`. If both land in one merge, there is a window between the merge and the release moving `v0` in which `main`'s
+composite points at a `v0` that does not contain this action, and that workflow fails at job setup (a nested action
+that cannot be resolved fails the whole job; `continue-on-error` does not help).
+
+1. Merge the change to `actions/dev-lock` **on its own** first.
+2. Wait for the release: a `bump:` commit appears on `main` and `v0` moves to it. Check with
+   `git fetch --tags -f && git rev-parse origin/main v0`; the two must be the same commit.
+3. Only then merge the change to `composite/deploy-cdk`.
+
 ## Development
 
 This action has its own Node project; the repo's Python tooling does not run it.
