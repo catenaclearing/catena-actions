@@ -298,6 +298,7 @@ def test_merge_to_main_notices_a_manual_hold_that_appears_while_it_waits(table, 
     assert acquire(settings, store, clock, out) == 0
     assert current_lock(table)["holder_key"] == "manual#U123"
     assert len(clock.slept) == 1
+    assert queue_items(table) == []  # it had been waiting; going ahead must not leave its waiting entry behind
 
 
 # --- the step output and messages -----------------------------------------------------------------------------------
@@ -376,3 +377,35 @@ def test_preempting_a_manual_hold_is_not_a_block(table, make, clock, out):
     acquire(settings, store, clock, out)
 
     assert out.outputs["blocked"] == "false"
+
+
+# --- what people read in the job log --------------------------------------------------------------------------------
+
+
+def test_taking_the_lock_says_so(table, make, clock, out):
+    set_mode(table, "enforce")
+    settings, store = make()
+
+    acquire(settings, store, clock, out)
+
+    assert out.messages == [("notice", f"Holding the dev lock for {settings.holder_key} (mode: enforce).")]
+
+
+def test_waiting_for_a_ci_deploy_says_for_how_long_and_where_you_are_in_the_queue(table, make, clock, out):
+    set_mode(table, "enforce")
+    hold_as_ci(table, expires_at=START + 100)
+    settings, store = make(main_push_env())
+
+    acquire(settings, store, clock, out)
+
+    assert "Waiting up to 30 min (queue position #1)" in text(out)
+    assert [message for message in out.messages if "Waiting up to" in message[1]] == [out.messages[0]]  # said once, not every poll
+
+
+def test_mode_off_says_it_is_off(table, make, clock, out):
+    set_mode(table, "off")
+    settings, store = make()
+
+    acquire(settings, store, clock, out)
+
+    assert out.messages == [("notice", "dev-lock is off (table CONFIG/mode); deploying without the lock.")]

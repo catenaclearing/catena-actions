@@ -139,7 +139,7 @@ def acquire(settings: Settings, store: LockStore, clock: Clock, out: Output) -> 
             return _took_lock(settings, store, out, mode)
 
         lock = store.get_lock()
-        if lock is None or lock.expires_at < clock.now():
+        if lock is None or lock.is_expired(store.now()):
             # Freed or expired between our write and our read: someone else may be racing us, so just try again.
             races += 1
             if races > MAX_RACE_RETRIES:

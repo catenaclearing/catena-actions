@@ -69,3 +69,19 @@ def test_a_real_block_is_not_swallowed_by_the_fail_open_wrapper(table, clock, ou
 
 def test_release_never_fails_the_job_even_on_a_real_error(clock, out):
     assert run("release", BrokenTable(client_error("InternalServerError")), clock, out) == 0
+
+
+def test_failing_open_says_not_acquired_and_keeps_the_traceback_for_debugging(clock, out):
+    run("acquire", BrokenTable(client_error("AccessDeniedException")), clock, out)
+
+    assert out.outputs["acquired"] == "false"
+    assert [level for level, _ in out.messages] == ["warning", "debug"]
+    assert "Traceback" in out.messages[1][1]
+
+
+def test_an_unknown_command_names_itself_and_an_empty_one_is_also_a_wiring_bug(clock, out):
+    assert main(["nope"], github_env(), table_factory=lambda _s: None, clock=clock, out=out) == 2
+    assert out.messages == [
+        ("error", "dev-lock: unknown command 'nope' (expected 'acquire' or 'release'); this is a bug in the action wiring."),
+    ]
+    assert main([], github_env(), table_factory=lambda _s: None, clock=clock, out=out) == 2
