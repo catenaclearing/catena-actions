@@ -3,14 +3,27 @@
 A global lock on the shared **development** environment, so two people (or two repos) don't deploy over
 each other and everyone can see who is using dev. Tracked in PLAT-473.
 
-This is a Docker action. It is meant to be called by `composite/deploy-cdk` (PLAT-478), not by
+This is a JavaScript action. It is meant to be called by `composite/deploy-cdk` (PLAT-478), not by
 individual repos. It takes the lock when the deploy starts and gives it back when the job ends
-(`post-entrypoint`, which runs on success, failure and cancel).
+(`post`, which runs on success, failure and cancel).
 
 State lives in the `catena-dev-lock` DynamoDB table, owned by the `DevLock` stack in
 `catena-platform` (`infra/dev_lock/README.md` documents the item model). The action uses the AWS
 credentials `deploy-cdk` has already configured, so it must run **after** "Configure AWS
 credentials". It never posts to Slack: the Slack Lambda reacts to changes in the table.
+
+## Why JavaScript and not Docker
+
+GitHub builds or pulls the image of **every Docker action in a job before the first step runs**: it walks all
+the steps, including actions nested inside a composite and including steps whose `if` is false, and queues a
+"Build" or "Pull" setup step for each (`ActionManager.PrepareActionsAsync` in `actions/runner`). A failed build
+fails the job during setup, where `continue-on-error` cannot help.
+
+`deploy-cdk@v0` is used by every deploy in every repo, production included. A Docker version of this action
+would therefore have been built by all of them, and a Docker Hub, PyPI or Debian archive outage would have
+failed every deploy. A JavaScript action is only downloaded, with nothing to build or pull. Keep it that way:
+`tests/test_dev_lock_action.py` fails if this action, or any action `deploy-cdk` references, becomes a Docker
+action.
 
 ## What it does
 
@@ -39,8 +52,15 @@ conditional write; the queue order is what the bot announces, it is not enforced
 | `wait_minutes` | `30` | How long a merge to main waits for a CI deploy |
 | `poll_seconds` | `15` | |
 
-Output `acquired`: `true` when this run holds the lock; `false` in report-only when someone else has it,
-when the mode is `off`, when a manual hold was overridden, and when the action failed open.
+| Output | |
+|---|---|
+| `acquired` | `true` when this run holds the lock; `false` in report-only when someone else has it, when the mode is `off`, when a manual hold was overridden, and when the action failed open |
+| `blocked` | `true` only when the deploy must stop (dev is locked, mode `enforce`); `false` in every other outcome, including a failed open |
+
+`composite/deploy-cdk` runs this action with `continue-on-error: true` and stops the job itself in a later step
+when `blocked` is `true`. That way a bug in the action or an unreachable lock store lets the deploy go ahead,
+and only a deliberate block stops it. The action still exits 1 on a block so the step shows red and the reason
+is visible.
 
 ## Runtime mode (the kill switch)
 
@@ -57,34 +77,40 @@ aws dynamodb put-item --table-name catena-dev-lock --item \
 
 Any error talking to the table (`AccessDenied`, missing table, throttling, timeouts, a bug in this
 action) becomes a `::warning::` and the deploy continues without the lock. Only a successful read that
-shows a live lock held by someone else can stop a deploy, and only in `enforce` mode. `release` never
-fails the job. With the table unreachable, a call adds about 7 seconds before giving up.
+shows a live lock held by someone else can stop a deploy, and only in `enforce` mode. The post step never
+fails the job. With the table unreachable, a call adds a few seconds before giving up (3 attempts, 5 s
+connect and 10 s request timeouts).
 
-An unknown command (`entrypoint.sh` / `post.sh` wiring) exits 2 on purpose.
+An unknown command (a wiring bug) exits 2 on purpose.
 
 ## How expiry works
 
-A lock is free when `expires_at < now`, checked inside the conditional write. DynamoDB TTL is **not** used
-for this: it deletes lazily, up to about 48 hours late. The `ttl` attribute only garbage-collects queue
-entries. The default 60 minutes must be longer than the longest dev deploy; a job that outlives it can be
-overtaken, and the next deploy will take the lock.
+A lock is free when `expires_at < now`, checked inside the conditional write, in whole seconds (the store
+owns the definition of "now", so the write and the runner cannot disagree). DynamoDB TTL is **not** used for
+this: it deletes lazily, up to about 48 hours late. The `ttl` attribute only garbage-collects queue entries.
+
+The default 60 minutes must be longer than the longest dev deploy; a job that outlives it can be overtaken,
+and the next deploy will take the lock. The AWS credentials the post step uses are the job's session
+credentials, which expire after an hour by default: a job that runs longer than that cannot release the lock
+and leaves it to expire on its own.
 
 ## Development
 
-Tests run with the repo's normal gates (`make lint test`); they use moto, so no AWS access is needed.
-
-`tests/test_image.py` builds the image and starts it with GitHub's `--workdir /github/workspace`. This matters:
-GitHub ignores the image's `WORKDIR`, so a package that is only importable from `/app` works on a laptop and fails
-on a runner. That is why the Dockerfile sets `PYTHONPATH=/app`. The test is skipped when docker is not available.
-
-To run the real image against a local DynamoDB (moto in server mode), build it and point it at the
-server with `AWS_ENDPOINT_URL`, passing the GitHub variables the action reads
-(`GITHUB_REPOSITORY`, `GITHUB_ACTOR`, `GITHUB_REF`, `GITHUB_RUN_ID`, `GITHUB_JOB`, `GITHUB_EVENT_NAME`,
-`GITHUB_OUTPUT`). Use `--entrypoint /post.sh` to run the release step.
+This action has its own Node project; the repo's Python tooling does not run it.
 
 ```bash
-docker build -t dev-lock-test actions/dev-lock
+cd actions/dev-lock
+npm ci
+npm test            # runs against an in-memory DynamoDB (dynalite), no AWS needed
+npm run build       # rebuilds dist/
 ```
 
-The image pins `boto3` to the version in `poetry.lock`, so what ships is what the tests ran against.
-Bump them together.
+**`dist/` is committed and is what GitHub runs.** After changing anything in `src/`, run `npm run build` and commit
+the result. A test fails, and so does CI, if the committed `dist/` is not exactly what the build produces. The
+repo's `.gitignore` ignores `dist/` in general and has an exception for this one.
+
+Tests run on [dynalite](https://github.com/architect/dynalite), so conditional writes, set operations, reserved
+words and consistent reads behave like DynamoDB. `test/dist.test.js` runs the real bundles as separate `node`
+processes from an unrelated directory, the way the runner does.
+
+Dependencies are pinned exactly in `package.json` and `package-lock.json`. Bump the AWS SDK packages together.
