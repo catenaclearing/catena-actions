@@ -39,8 +39,14 @@ conditional write; the queue order is what the bot announces, it is not enforced
 | `wait_minutes` | `30` | How long a merge to main waits for a CI deploy |
 | `poll_seconds` | `15` | |
 
-Output `acquired`: `true` when this run holds the lock; `false` in report-only when someone else has it,
-when the mode is `off`, when a manual hold was overridden, and when the action failed open.
+| Output | |
+|---|---|
+| `acquired` | `true` when this run holds the lock; `false` in report-only when someone else has it, when the mode is `off`, when a manual hold was overridden, and when the action failed open |
+| `blocked` | `true` only when the deploy must stop (dev is locked, mode `enforce`); `false` in every other outcome, including a failed open |
+
+`composite/deploy-cdk` runs this action with `continue-on-error: true` and stops the job itself in a later step
+when `blocked` is `true`. That way a failed image build or a bug in the action lets the deploy go ahead, and only
+a deliberate block stops it. The action still exits 1 on a block so the step shows red and the reason is visible.
 
 ## Runtime mode (the kill switch)
 
@@ -84,3 +90,14 @@ docker build -t dev-lock-test actions/dev-lock
 
 The image pins `boto3` to the version in `poetry.lock`, so what ships is what the tests ran against.
 Bump them together.
+
+## Testing a change to the lock on a branch
+
+`deploy-cdk@v0` is a floating tag that moves on every release, so a change reaches every repo as soon as it
+merges. Test on a branch first. In a throwaway branch (never merged), change the `uses:` line for this action in
+`composite/deploy-cdk/action.yaml` from `@v0` to the branch name, and run a deploy with
+`dev_lock_repos` set to the repo you are testing from (this repo's own `Deploy CDK` workflow deploys
+`DummyActions-Development` to the dev account, so it works as a canary). A test fails if the real branch ever
+pins this action to anything but `@v0`, which is what stops a canary pin from being merged by accident.
+
+Needs the `DevLock` stack and the `AllowDevLockTable` grant on `GitHubActionsDeployer` to be deployed to dev.

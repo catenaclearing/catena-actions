@@ -31,6 +31,7 @@ def test_access_denied_does_not_fail_the_deploy(clock, out):
     assert run("release", broken, clock, out) == 0
     assert out.messages[0][0] == "warning"
     assert "AccessDeniedException" in out.messages[0][1]
+    assert out.outputs["blocked"] == "false"  # an outage must never read as a deliberate block
 
 
 def test_a_missing_table_does_not_fail_the_deploy(clock, out):

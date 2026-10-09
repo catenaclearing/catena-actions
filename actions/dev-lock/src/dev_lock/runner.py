@@ -69,6 +69,7 @@ class _Wait:
 def _took_lock(settings: Settings, store: LockStore, out: Output, mode: Mode) -> int:
     store.remove_queue_entries(settings.holder_key)
     out.set_output("acquired", "true")
+    out.set_output("blocked", "false")
     out.notice(f"Holding the dev lock for {settings.holder_key} (mode: {mode.value}).")
     return 0
 
@@ -128,6 +129,7 @@ def acquire(settings: Settings, store: LockStore, clock: Clock, out: Output) -> 
     if mode is Mode.OFF:
         out.notice("dev-lock is off (table CONFIG/mode); deploying without the lock.")
         out.set_output("acquired", "false")
+        out.set_output("blocked", "false")
         return 0
 
     wait = _Wait()
@@ -148,6 +150,7 @@ def acquire(settings: Settings, store: LockStore, clock: Clock, out: Output) -> 
         exit_code = _held_by_someone_else(settings, store, clock, out, mode, lock, wait)
         if exit_code is not None:
             out.set_output("acquired", "false")
+            out.set_output("blocked", "true" if exit_code else "false")
             return exit_code
         clock.sleep(settings.poll_seconds)
 
@@ -195,4 +198,5 @@ def main(
         )
         out.debug_traceback()
         out.set_output("acquired", "false")
+        out.set_output("blocked", "false")
         return 0

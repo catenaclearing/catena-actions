@@ -6,6 +6,9 @@ description: >-
   fails if the stack already exists but is owned by a different repo, so a new
   service can't overwrite another service's stack that happens to share the same
   name. The deploy then stamps that tag so ownership is always recorded.
+  In the development account, deploys of the repos in dev_lock_repos also take
+  the global dev lock first (actions/dev-lock, PLAT-473), so two deploys don't
+  overwrite each other. Every other deploy is unaffected.
 
 inputs:
   role_to_assume:
@@ -53,6 +56,22 @@ inputs:
     required: false
     default: "false"
 
+  dev_lock_repos:
+    description: >-
+      Comma-separated owner/repo names whose deploys to the development account
+      take the global dev lock (PLAT-473). Any other repo, and any deploy to
+      another account, never touches the lock. Adding a repo is a change here.
+    required: false
+    default: "catenaclearing/catena-platform,catenaclearing/telematics-data-service,catenaclearing/telematics-integrations-service,catenaclearing/telematics-intelligence-service,catenaclearing/telematics-notifications-service,catenaclearing/telematics-organizations-service"
+
+  dev_lock_account_id:
+    description: >-
+      The development AWS account ID. The dev lock is only ever taken when the
+      credentials in use belong to this account, so production and management
+      deploys cannot touch it.
+    required: false
+    default: "339713031246"
+
 runs:
   using: composite
   steps:
@@ -89,6 +108,38 @@ runs:
         role-to-assume: ${{ inputs.role_to_assume }}
         role-session-name: ${{ github.event.repository.name }}-${{ github.actor }}
         aws-region: ${{ inputs.aws_region }}
+
+    # Dev environment lock (PLAT-473). Three steps, built so that nothing here can fail a deploy by accident:
+    #   1. the gate decides, and can never fail (script exits 0, and continue-on-error as a second net);
+    #   2. the lock step is skipped unless the gate says yes, and runs with continue-on-error, so a failed image build
+    #      or a bug in the action lets the deploy go ahead (the lock is coordination, not a security control);
+    #   3. only a deliberate block (dev is locked, mode enforce) stops the deploy, in the step below.
+    - name: Decide whether this deploy takes the dev lock
+      id: dev-lock-gate
+      continue-on-error: true
+      shell: bash
+      run: '"$ACTION_PATH/dev-lock-gate.sh"'
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DEV_LOCK_REPOS: ${{ inputs.dev_lock_repos }}
+        DEV_LOCK_ACCOUNT_ID: ${{ inputs.dev_lock_account_id }}
+
+    - name: Take the dev environment lock
+      id: dev-lock
+      if: steps.dev-lock-gate.outputs.is_dev_lock == 'true'
+      continue-on-error: true
+      uses: catenaclearing/catena-actions/actions/dev-lock@v0
+      with:
+        aws_region: ${{ inputs.aws_region }}
+
+    - name: Stop the deploy, dev is locked
+      id: dev-lock-blocked
+      if: steps.dev-lock.outputs.blocked == 'true'
+      shell: bash
+      run: |
+        echo "::error::Not deploying: dev is locked by another deploy or a manual hold."
+        echo "::error::The 'Take the dev environment lock' step above says who has it and your queue position."
+        exit 1
 
     - name: Guard against overwriting another service's stack
       shell: bash

@@ -313,7 +313,7 @@ def test_waiting_writes_the_step_output_once_not_on_every_poll(table, make, cloc
     acquire(settings, store, clock, out)
 
     assert len(clock.slept) > 3  # it really did poll several times
-    assert output_file.read_text() == "acquired=true\n"
+    assert output_file.read_text() == "acquired=true\nblocked=false\n"
 
 
 def test_a_lock_about_to_expire_does_not_say_zero_minutes(table, make, clock, out):
@@ -325,3 +325,54 @@ def test_a_lock_about_to_expire_does_not_say_zero_minutes(table, make, clock, ou
 
     assert "about 0 min" not in text(out)
     assert "under a minute" in text(out)
+
+
+# --- the `blocked` output: how a deliberate stop reaches the workflow when the step is continue-on-error -----------
+
+
+def test_a_blocked_pr_deploy_says_so_in_its_output(table, make, clock, out):
+    set_mode(table, "enforce")
+    hold_as_ci(table)
+    settings, store = make()
+
+    assert acquire(settings, store, clock, out) == 1
+
+    assert out.outputs["blocked"] == "true"
+
+
+def test_a_merge_to_main_that_gave_up_waiting_says_so_in_its_output(table, make, clock, out):
+    set_mode(table, "enforce")
+    hold_as_ci(table, expires_at=START + 99999)
+    settings, store = make(main_push_env())
+
+    assert acquire(settings, store, clock, out) == 1
+
+    assert out.outputs["blocked"] == "true"
+
+
+def test_every_outcome_that_lets_the_deploy_go_ahead_says_not_blocked(table, make, clock, out):
+    set_mode(table, "enforce")
+    settings, store = make()
+    acquire(settings, store, clock, out)
+    assert out.outputs["blocked"] == "false"  # took the lock
+
+    set_mode(table, "off")
+    other, _ = make(github_env(GITHUB_ACTOR="bob", GITHUB_RUN_ID="1002"))
+    out_off = Output(echo=False)
+    acquire(other, store, clock, out_off)
+    assert out_off.outputs["blocked"] == "false"  # mode off
+
+    set_mode(table, "report-only")
+    out_report = Output(echo=False)
+    acquire(other, store, clock, out_report)
+    assert out_report.outputs["blocked"] == "false"  # report-only, someone else holds it
+
+
+def test_preempting_a_manual_hold_is_not_a_block(table, make, clock, out):
+    set_mode(table, "enforce")
+    hold_as_manual(table)
+    settings, store = make(main_push_env())
+
+    acquire(settings, store, clock, out)
+
+    assert out.outputs["blocked"] == "false"

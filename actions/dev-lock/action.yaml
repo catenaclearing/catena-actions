@@ -35,6 +35,12 @@ outputs:
   acquired:
     description: "'true' when this run holds the lock, otherwise 'false' (report-only, off, preempted a manual hold, or fail-open)"
 
+  blocked:
+    description: >-
+      'true' only when the deploy must stop (dev is locked and the mode is enforce). The caller runs this step with
+      continue-on-error, so a failed image build or an action bug does not stop a deploy, and fails the job itself when
+      this is 'true'.
+
 runs:
   using: docker
   image: Dockerfile
