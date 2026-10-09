@@ -105,3 +105,31 @@ merges. Test on a branch first. In a throwaway branch (never merged), change the
 pins this action to anything but `@v0`, which is what stops a canary pin from being merged by accident.
 
 Needs the `DevLock` stack and the `AllowDevLockTable` grant on `GitHubActionsDeployer` to be deployed to dev.
+
+### Canary checklist
+
+Run these on the branch pin before merging anything that changes `composite/deploy-cdk`. The first one is the one
+nobody has been able to settle from the documentation, and the answer decides whether this action should stay a
+Docker action.
+
+| # | Run | Look for |
+|---|---|---|
+| 1 | **A broken image**: on the throwaway branch add `RUN false` to the Dockerfile | The lock step fails but the deploy goes ahead (`continue-on-error`). Then look at the post step: if "Post Take the dev environment lock" fails and turns the job red, a registry outage would fail every dev deploy, and this action should become a JavaScript action (no image to build) |
+| 2 | A normal deploy | "Holding the dev lock" in the log (not an `AccessDenied` or `NoCredentialsError` warning, which would mean the AWS credentials did not reach the container); the lock item exists during the deploy and is gone after it |
+| 3 | The same deploy again, plus a second deploy started while it runs, in `enforce` mode | The second goes red at "Stop the deploy, dev is locked" with the holder and a queue position; the first is unaffected |
+| 4 | Two deploys started at the same moment | Exactly one holder (this is the real DynamoDB check the unit tests cannot make) |
+| 5 | A job that is cancelled mid-deploy | The lock is released |
+| 6 | The duration of the "Build container" step | Over about 30 seconds is the agreed reason to switch to a JavaScript action |
+
+## Releasing: merge order
+
+`deploy-cdk@v0` is a floating tag that the release workflow moves on every merge to `main` that bumps the version.
+This repo's own `Deploy CDK` workflow uses `deploy-cdk@main`, and `composite/deploy-cdk` refers to this action as
+`@v0`. If both land in one merge, there is a window between the merge and the release moving `v0` in which `main`'s
+composite points at a `v0` that does not contain this action, and that workflow fails at job setup (a nested action
+that cannot be resolved fails the whole job; `continue-on-error` does not help).
+
+1. Merge the change to `actions/dev-lock` **on its own** first.
+2. Wait for the release: a `bump:` commit appears on `main` and `v0` moves to it. Check with
+   `git fetch --tags -f && git rev-parse origin/main v0`; the two must be the same commit.
+3. Only then merge the change to `composite/deploy-cdk`.
