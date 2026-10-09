@@ -3,6 +3,7 @@ name: Dev Lock
 description: >-
   Take the global lock on the shared development environment before a deploy, and give it back when the job ends
   (success, failure or cancel). Coordination only: it never fails a deploy because the lock store is unavailable.
+  A JavaScript action, so GitHub has nothing to build or pull before the job starts.
   Meant to be called by composite/deploy-cdk, after AWS credentials are configured; see the README.
 
 inputs:
@@ -38,12 +39,11 @@ outputs:
   blocked:
     description: >-
       'true' only when the deploy must stop (dev is locked and the mode is enforce). The caller runs this step with
-      continue-on-error, so a failed image build or an action bug does not stop a deploy, and fails the job itself when
-      this is 'true'.
+      continue-on-error, so a bug in the action or an unreachable lock store does not stop a deploy, and fails the job
+      itself when this is 'true'.
 
 runs:
-  using: docker
-  image: Dockerfile
-  entrypoint: /entrypoint.sh
-  post-entrypoint: /post.sh
+  using: node24
+  main: dist/main.cjs
+  post: dist/post.cjs
   post-if: always()
