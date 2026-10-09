@@ -52,6 +52,8 @@ fix-lock: ## Regenerate and stage the Poetry lock files
 test: ## Run tests
 	$(run_in_projects)
 	@poetry run python -m pytest
+	@npm --prefix actions/dev-lock ci --no-audit --no-fund --silent
+	@npm --prefix actions/dev-lock test
 
 .PHONY: lint
 lint: ## Apply linters to all files
