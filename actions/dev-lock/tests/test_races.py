@@ -4,7 +4,7 @@ import dev_lock.runner as runner_module
 import pytest
 from dev_lock.runner import acquire, main, release
 from dev_lock.store import LockStore
-from dev_lock_support import START, current_lock, github_env, hold_as_ci, queue_items, set_mode
+from dev_lock_support import START, current_lock, github_env, hold_as_ci, main_push_env, queue_items, set_mode
 
 
 class FlakyStore(LockStore):
@@ -183,3 +183,36 @@ def test_a_notify_me_entry_is_not_dropped_for_having_no_heartbeat(table, make, c
     acquire(second, store, clock, out)
 
     assert "#2" in out.messages[-1][1]
+
+
+# --- sub-second time: the store compares whole seconds, so the runner must too ----------------------------------------
+
+
+def test_a_lock_that_expired_within_this_second_is_not_mistaken_for_a_race(table, make, clock, out):
+    """Found running the real container: expires_at == the current whole second, but the wall clock is at .9.
+
+    The store (whole seconds) says "not expired yet"; comparing against the fractional clock said "expired, so it is a
+    race, retry now". Six instant retries in the same second then gave up and failed open.
+    """
+    set_mode(table, "enforce")
+    hold_as_ci(table, expires_at=START)
+    clock.current = START + 0.9
+    settings, store = make(main_push_env())
+
+    assert acquire(settings, store, clock, out) == 0
+
+    assert current_lock(table)["holder_key"] == settings.holder_key  # it waited for the next poll and took the lock
+    assert len(clock.slept) == 1
+    assert all("kept changing" not in message for _, message in out.messages)
+
+
+@pytest.mark.parametrize("fraction", [0.0, 0.25, 0.5, 0.999])
+def test_a_pr_deploy_is_told_who_holds_the_lock_at_any_fraction_of_the_expiry_second(table, make, clock, out, fraction):
+    set_mode(table, "enforce")
+    hold_as_ci(table, expires_at=START)
+    clock.current = START + fraction
+    settings, store = make()
+
+    assert acquire(settings, store, clock, out) == 1
+
+    assert "bob" in out.messages[-1][1]

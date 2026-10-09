@@ -1,9 +1,12 @@
 FROM python:3.13-slim-bookworm
 
 # Pinned to the boto3 the tests run against (poetry.lock), so what ships is what was tested.
+# PYTHONPATH matters: GitHub starts a container action with --workdir /github/workspace, ignoring WORKDIR, so
+# `python -m dev_lock` would not find the package if it relied on the working directory.
 ENV BOTO3_VERSION=1.35.49 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 RUN pip install --no-cache-dir "boto3==${BOTO3_VERSION}"
 

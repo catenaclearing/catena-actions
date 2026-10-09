@@ -73,6 +73,10 @@ overtaken, and the next deploy will take the lock.
 
 Tests run with the repo's normal gates (`make lint test`); they use moto, so no AWS access is needed.
 
+`tests/test_image.py` builds the image and starts it with GitHub's `--workdir /github/workspace`. This matters:
+GitHub ignores the image's `WORKDIR`, so a package that is only importable from `/app` works on a laptop and fails
+on a runner. That is why the Dockerfile sets `PYTHONPATH=/app`. The test is skipped when docker is not available.
+
 To run the real image against a local DynamoDB (moto in server mode), build it and point it at the
 server with `AWS_ENDPOINT_URL`, passing the GitHub variables the action reads
 (`GITHUB_REPOSITORY`, `GITHUB_ACTOR`, `GITHUB_REF`, `GITHUB_RUN_ID`, `GITHUB_JOB`, `GITHUB_EVENT_NAME`,

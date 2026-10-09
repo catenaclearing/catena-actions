@@ -85,3 +85,19 @@ def test_pr_url_is_absent_without_a_payload():
 
 def test_run_url_is_built_from_the_environment():
     assert Settings.from_env(github_env()).run_url == "https://github.com/catenaclearing/telematics-data-service/actions/runs/1001"
+
+
+def test_the_region_defaults_to_us_east_1():
+    env = github_env()
+    env.pop("AWS_DEFAULT_REGION")
+    assert Settings.from_env(env).region == "us-east-1"
+
+
+def test_the_region_comes_from_the_environment_in_order():
+    env = github_env()
+    env["AWS_DEFAULT_REGION"] = "eu-west-1"
+    assert Settings.from_env(env).region == "eu-west-1"
+    env["AWS_REGION"] = "ap-south-1"  # what configure-aws-credentials exports; it wins over the default region
+    assert Settings.from_env(env).region == "ap-south-1"
+    env["INPUT_AWS_REGION"] = "us-west-2"  # an explicit input wins over everything
+    assert Settings.from_env(env).region == "us-west-2"

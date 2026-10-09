@@ -34,3 +34,17 @@ def test_a_second_deployer_is_blocked_through_the_real_client(table, out):
 
     assert [item["actor"] for item in queue_items(table)] == ["bob"]
     assert current_lock(table)["actor"] == "alice"
+
+
+def test_with_no_arguments_main_reads_the_process_environment_and_writes_the_github_output_file(table, monkeypatch, tmp_path):
+    """This is how the container runs it: no env passed, GITHUB_OUTPUT is a file the runner reads afterwards."""
+    set_mode(table, "enforce")
+    output_file = tmp_path / "github_output"
+    for name, value in github_env().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    assert main(["acquire"]) == 0
+
+    assert "acquired=true" in output_file.read_text().splitlines()
+    assert current_lock(table)["actor"] == "alice"

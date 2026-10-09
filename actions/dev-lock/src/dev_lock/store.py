@@ -18,7 +18,7 @@ def _is_condition_failure(error: ClientError) -> bool:
     return error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
 
 
-def _is_live(entry: dict[str, Any], now: float) -> bool:
+def _is_live(entry: dict[str, Any], now: int) -> bool:
     if int(entry.get("ttl", now + 1)) <= now:
         return False
     # A `notify` entry belongs to a job that already failed and does not poll, so only `poll` entries can go stale.
@@ -37,6 +37,10 @@ class Lock:
     reason: str | None
     started_at: int
     expires_at: int
+
+    def is_expired(self, now: int) -> bool:
+        """Whether this lock is free to take. Same rule as the conditional write: `expires_at < now`, in whole seconds."""
+        return self.expires_at < now
 
     @classmethod
     def from_item(cls, item: dict[str, Any]) -> "Lock":
@@ -64,6 +68,10 @@ class LockStore:
         self.table = table
         self.clock = clock
 
+    def now(self) -> int:
+        """Return the current time in whole seconds. Every expiry decision uses this, so the store and the runner cannot disagree."""
+        return int(self.clock())
+
     # --- config -----------------------------------------------------------------------------------------------------
 
     def get_mode(self) -> str | None:
@@ -80,7 +88,7 @@ class LockStore:
 
     def put_if_free(self, settings: Settings) -> bool:
         """Take the lock if nobody holds it or the holder's lock has expired. A fresh start: new `started_at`, only this run."""
-        now = int(self.clock())
+        now = self.now()
         item = {
             **LOCK_KEY,
             "holder_type": "ci",
@@ -108,7 +116,7 @@ class LockStore:
 
     def join_if_mine(self, settings: Settings) -> bool:
         """Add this run to a lock its own holder already has (and push the expiry out)."""
-        now = int(self.clock())
+        now = self.now()
         try:
             self.table.update_item(
                 Key=LOCK_KEY,
@@ -166,7 +174,7 @@ class LockStore:
                 Key=LOCK_KEY,
                 UpdateExpression="SET preempted_by = :by, preempted_at = :now",
                 ConditionExpression="holder_key = :hk",
-                ExpressionAttributeValues={":by": by, ":now": int(self.clock()), ":hk": holder_key},
+                ExpressionAttributeValues={":by": by, ":now": self.now(), ":hk": holder_key},
             )
         except ClientError as error:
             if not _is_condition_failure(error):
@@ -190,7 +198,7 @@ class LockStore:
 
     def _live_queue(self) -> list[dict[str, Any]]:
         """Queue entries that still count: not expired, and for a polling job, still being refreshed."""
-        now = self.clock()
+        now = self.now()
         return [item for item in self._queue() if _is_live(item, now)]
 
     def enqueue(self, settings: Settings, kind: str) -> int:
@@ -199,7 +207,7 @@ class LockStore:
         `notify`: a failed deploy asking to be pinged when dev is free (kept until it gets the lock or leaves).
         `poll`: a deploy that is waiting in its job (removed when it stops waiting).
         """
-        now = int(self.clock())
+        now = self.now()
         mine = [item for item in self._live_queue() if item["holder_key"] == settings.holder_key]
         if mine:
             self.table.update_item(
