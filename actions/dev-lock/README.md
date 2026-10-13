@@ -40,7 +40,8 @@ A merge to main is never stalled by a manual hold because production deploys wai
 
 A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
 Slack bot can ping that person when dev is free. Acquisition is first come, first served through a
-conditional write; the queue order is what the bot announces, it is not enforced by the lock.
+conditional write; the queue order is what the bot announces, it is not enforced by the lock. A holder has one queue
+entry: if two of its runs queue at the same moment, both keep the earliest entry and delete the other.
 
 ## Inputs and outputs
 
@@ -48,9 +49,9 @@ conditional write; the queue order is what the bot announces, it is not enforced
 |---|---|---|
 | `table_name` | `catena-dev-lock` | |
 | `aws_region` | `AWS_REGION` / `AWS_DEFAULT_REGION`, then `us-east-1` | |
-| `ttl_minutes` | `60` | How long a lock lasts if its job dies without releasing it. Refreshed on every call within a job |
-| `wait_minutes` | `30` | How long a merge to main waits for a CI deploy |
-| `poll_seconds` | `15` | |
+| `ttl_minutes` | `60` | How long a lock lasts if its job dies without releasing it. Refreshed on every call within a job. At least 1 |
+| `wait_minutes` | `30` | How long a merge to main waits for a CI deploy. At least 0 (0 gives up straight away) |
+| `poll_seconds` | `15` | At least 1 |
 
 | Output | |
 |---|---|

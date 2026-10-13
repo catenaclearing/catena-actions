@@ -253,7 +253,15 @@ export class LockStore {
       if (settings.prUrl) item.pr_url = settings.prUrl;
       await this.doc.send(new PutCommand({ TableName: this.tableName, Item: item }));
     }
-    const holders = (await this.#liveQueue()).map((entry) => entry.holder_key);
+    // Two runs of one holder can both find no entry and both add one. Keep the earliest and delete the rest: every run
+    // sorts the same way, so they all keep the same entry and the deletes are idempotent.
+    const live = await this.#liveQueue();
+    const duplicates = live.filter((entry) => entry.holder_key === settings.holderKey).slice(1);
+    for (const entry of duplicates) {
+      await this.doc.send(new DeleteCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: entry.sk } }));
+    }
+    // Count holders, not entries, so another holder's duplicate (mid-race) does not push everyone behind it back.
+    const holders = [...new Set(live.map((entry) => entry.holder_key))];
     return holders.indexOf(settings.holderKey) + 1;
   }
 

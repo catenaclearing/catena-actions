@@ -167,6 +167,66 @@ describe("the queue", () => {
   });
 });
 
+describe("two runs of one holder queueing at the same moment", () => {
+  /** Clients whose first queue read waits until every run has done one, so each run sees a queue without its entry. */
+  function barrier(doc, count) {
+    let arrived = 0;
+    let open;
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    return () => {
+      let waited = false;
+      return {
+        send: async (command) => {
+          const response = await doc.send(command);
+          if (!waited && command instanceof QueryCommand) {
+            waited = true;
+            arrived += 1;
+            if (arrived === count) open();
+            await opened;
+          }
+          return response;
+        },
+      };
+    };
+  }
+
+  it("end up with one queue entry, and both are told the same position", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi();
+    const ahead = "ci#catenaclearing/other#carol#refs/pull/9/merge";
+    await ctx.put({ pk: "QUEUE#dev", sk: `${String((START - 30) * 1000).padStart(13, "0")}#${ahead}`, kind: "notify", holder_key: ahead, ttl: START + 3600 });
+    const client = barrier(ctx.doc, 2);
+    // Each run sees a different millisecond, as two runners would, so their entries get different sort keys.
+    const runs = [["1001", 0.001], ["1002", 0.002]].map(([id, offset]) => ({
+      settings: ctx.make(githubEnv({ GITHUB_RUN_ID: id })).settings,
+      store: new LockStore(client(), ctx.tableName, () => ctx.clock.now() + offset),
+    }));
+
+    const positions = await Promise.all(runs.map(({ settings, store }) => store.enqueue(settings, "notify")));
+
+    const mine = (await ctx.queueItems()).filter((entry) => entry.holder_key === runs[0].settings.holderKey);
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].sk, `${String((START * 1000) + 1).padStart(13, "0")}#${runs[0].settings.holderKey}`); // the earliest stays
+    assert.deepEqual(positions, [2, 2]);
+  });
+
+  it("another holder's duplicate entry does not push the holders behind it back", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi();
+    const ahead = "ci#catenaclearing/other#carol#refs/pull/9/merge";
+    for (const offset of [30, 20]) {
+      await ctx.put({ pk: "QUEUE#dev", sk: `${String((START - offset) * 1000).padStart(13, "0")}#${ahead}`, kind: "notify", holder_key: ahead, ttl: START + 3600 });
+    }
+    const { settings, store } = ctx.make();
+
+    assert.equal(await store.enqueue(settings, "notify"), 2);
+  });
+});
+
 describe("sub-second time: the store compares whole seconds, so the runner must too", () => {
   // Found running the real container: expires_at == the current whole second, but the wall clock is at .9. The store
   // (whole seconds) said "not expired yet" while a comparison against the fractional clock said "expired, so it is a

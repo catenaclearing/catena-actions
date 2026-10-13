@@ -19,9 +19,16 @@ function required(env, name) {
   return env[name];
 }
 
-function integer(text, name) {
-  if (!/^-?\d+$/.test(String(text))) throw new Error(`${name} must be a whole number, got ${JSON.stringify(text)}`);
-  return Number.parseInt(text, 10);
+/**
+ * Parse a whole-number input of at least `min`. Zero or a negative TTL would write a lock that has already expired, and a
+ * zero or negative poll interval would spin against the table, so each input has its own lower bound.
+ */
+function integer(text, name, min) {
+  const value = Number(text);
+  if (!/^-?\d+$/.test(String(text)) || !Number.isSafeInteger(value) || value < min) {
+    throw new Error(`${name} must be a whole number of at least ${min}, got ${JSON.stringify(text)}`);
+  }
+  return value;
 }
 
 function pullRequestUrl(env) {
@@ -47,9 +54,9 @@ export class Settings {
     return new Settings({
       tableName: input(env, "TABLE_NAME", DEFAULTS.tableName),
       region: input(env, "AWS_REGION", env.AWS_REGION || env.AWS_DEFAULT_REGION || DEFAULTS.region),
-      ttlSeconds: integer(input(env, "TTL_MINUTES", String(DEFAULTS.ttlMinutes)), "ttl_minutes") * 60,
-      waitSeconds: integer(input(env, "WAIT_MINUTES", String(DEFAULTS.waitMinutes)), "wait_minutes") * 60,
-      pollSeconds: integer(input(env, "POLL_SECONDS", String(DEFAULTS.pollSeconds)), "poll_seconds"),
+      ttlSeconds: integer(input(env, "TTL_MINUTES", String(DEFAULTS.ttlMinutes)), "ttl_minutes", 1) * 60,
+      waitSeconds: integer(input(env, "WAIT_MINUTES", String(DEFAULTS.waitMinutes)), "wait_minutes", 0) * 60,
+      pollSeconds: integer(input(env, "POLL_SECONDS", String(DEFAULTS.pollSeconds)), "poll_seconds", 1),
       repo: required(env, "GITHUB_REPOSITORY"),
       actor: required(env, "GITHUB_ACTOR"),
       ref: required(env, "GITHUB_REF"),

@@ -18,17 +18,17 @@ inputs:
     default: ""
 
   ttl_minutes:
-    description: How long a deploy's lock lasts if the job dies without releasing it. Refreshed on each call within a job
+    description: How long a deploy's lock lasts if the job dies without releasing it. Refreshed on each call within a job. At least 1
     required: false
     default: "60"
 
   wait_minutes:
-    description: How long a merge to main waits for a CI deploy ahead of it before giving up
+    description: How long a merge to main waits for a CI deploy ahead of it before giving up. At least 0
     required: false
     default: "30"
 
   poll_seconds:
-    description: How often a waiting merge to main checks the lock
+    description: How often a waiting merge to main checks the lock, in seconds. At least 1
     required: false
     default: "15"
 
