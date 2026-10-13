@@ -65,6 +65,31 @@ describe("Settings", () => {
     assert.throws(() => Settings.fromEnv(githubEnv({ INPUT_TTL_MINUTES: "soon" })), /ttl_minutes must be a whole number/);
   });
 
+  const outOfRange = [
+    // A zero or negative TTL writes a lock that has already expired, so two deploys could both take it.
+    ["TTL_MINUTES", "0", /ttl_minutes must be a whole number of at least 1, got "0"/],
+    ["TTL_MINUTES", "-5", /ttl_minutes must be a whole number of at least 1/],
+    // A zero or negative poll interval would query the table in a tight loop for the whole wait.
+    ["POLL_SECONDS", "0", /poll_seconds must be a whole number of at least 1/],
+    ["POLL_SECONDS", "-1", /poll_seconds must be a whole number of at least 1/],
+    ["WAIT_MINUTES", "-1", /wait_minutes must be a whole number of at least 0/],
+    ["TTL_MINUTES", "99999999999999999999", /ttl_minutes must be a whole number/],
+  ];
+  for (const [inputName, value, error] of outOfRange) {
+    it(`rejects ${inputName.toLowerCase()} = ${value}`, () => {
+      assert.throws(() => Settings.fromEnv(githubEnv({ [`INPUT_${inputName}`]: value })), error);
+    });
+  }
+
+  it("a wait of zero is allowed (a merge to main gives up straight away)", () => {
+    assert.equal(Settings.fromEnv(githubEnv({ INPUT_WAIT_MINUTES: "0" })).waitSeconds, 0);
+  });
+
+  it("the smallest allowed TTL and poll interval are accepted", () => {
+    const settings = Settings.fromEnv(githubEnv({ INPUT_TTL_MINUTES: "1", INPUT_POLL_SECONDS: "1" }));
+    assert.deepEqual([settings.ttlSeconds, settings.pollSeconds], [60, 1]);
+  });
+
   it("a missing GitHub variable is an error", () => {
     const env = githubEnv();
     delete env.GITHUB_REPOSITORY;
