@@ -424,6 +424,18 @@ describe("a manual hold that ends while a merge to main is preempting it", () =>
     assert.equal((await ctx.currentLock()).preempted_by, undefined);
   });
 
+  it("does not take over a hold that was extended in between (it reads the lock again and takes the new one over)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const doc = afterFirstLockRead(ctx.doc, () => ctx.holdAsManual({ expiresAt: START + 9000 })); // `/dev extend`
+    const { settings, store } = ctx.make(mainPushEnv(), {}, doc);
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.equal((await ctx.currentLock()).preempted_hold.expires_at, START + 9000); // the extended hold is the one kept
+  });
+
   it("takes the lock when the hold ended and nobody else did", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
@@ -438,7 +450,7 @@ describe("a manual hold that ends while a merge to main is preempting it", () =>
     assert.equal(told(ctx), false);
   });
 
-  it("does not stamp a hold that expired in the meantime", async () => {
+  it("does not take over a hold that expired in the meantime", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
     await ctx.holdAsManual({ expiresAt: START + 1 });
@@ -459,7 +471,7 @@ describe("a manual hold that ends while a merge to main is preempting it", () =>
     await ctx.setMode("enforce");
     await ctx.holdAsManual();
     const { settings, store } = ctx.make(mainPushEnv());
-    store.markPreempted = async () => false; // the hold is gone every time it is stamped, yet getLock keeps finding one
+    store.takeOverHold = async () => false; // the hold is gone every time it is taken over, yet getLock keeps finding one
 
     await assert.rejects(acquire(settings, store, ctx.clock, ctx.out), /kept changing/);
   });

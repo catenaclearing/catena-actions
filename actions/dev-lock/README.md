@@ -36,9 +36,17 @@ action.
 | Held by a manual hold, **merge to main** | warn, deploy anyway | deploy anyway, and tell the holder |
 
 A merge to main is never stalled by a manual hold because production deploys wait on the dev deploy
-(`deploy-production` has `needs: deploy-development`). It only goes ahead over a hold that is still there when it
-stamps it: if the hold ends in between (`/dev unlock`, or it expires) the run reads the lock again, which takes the
-lock or, if a CI deploy got there first, waits behind it like any other merge to main.
+(`deploy-production` has `needs: deploy-development`). It does not deploy alongside the hold, though: it takes the
+lock over. The lock item becomes an ordinary CI lease held by that run (its sibling runs join it, every other deploy
+waits or is blocked behind it), the hold is kept in `preempted_hold`, and `preempted_by` / `preempted_at` are set so
+the Slack bot can tell the holder. When the last run of that merge releases, the hold is put back if it has not run
+out, still carrying `preempted_by`; otherwise the lock is freed. The takeover is conditional on exactly the hold that
+was read (same holder, `started_at` and `expires_at`, still live): if it ended or changed in between (`/dev unlock`,
+`/dev extend`, it expired) the run reads the lock again, which takes the lock, takes the new hold over, or, if a CI
+deploy got there first, waits behind it like any other merge to main.
+
+For the Slack bot: while a hold is taken over, the lock item is `holder_type = ci`. `/dev unlock` from that holder
+should remove `preempted_hold` (so it is not put back), not delete the lock, which belongs to the deploy.
 
 A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
 Slack bot can ping that person when dev is free. Acquisition is first come, first served through a

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import net from "node:net";
 import { after, before, describe, it } from "node:test";
 import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { LIMITS, createDocumentClient, requestHandlerOptions } from "../src/client.js";
 import { run } from "../src/runner.js";
 import { LockStore } from "../src/store.js";
@@ -73,6 +74,17 @@ describe("the DynamoDB client's timeouts", () => {
     assert.equal(ctx.out.outputs.blocked, "false");
 
     assert.equal(await within(3000, run("release", { env, clock: ctx.clock, out: ctx.out, makeStore }), "release against a silent store"), 0);
+  });
+
+  it("hands the SDK a real NodeHttpHandler instance carrying those options", async () => {
+    const doc = createDocumentClient({ region: "us-east-1" }, {});
+    const handler = doc.config.requestHandler;
+
+    assert.ok(handler instanceof NodeHttpHandler);
+    const config = await handler.configProvider;
+    assert.equal(config.connectionTimeout, LIMITS.connectionTimeout);
+    assert.equal(config.requestTimeout, LIMITS.requestTimeout);
+    assert.equal(config.throwOnRequestTimeout, true);
   });
 
   it("the handler options always ask the SDK to throw on a request timeout, with the documented limits", () => {

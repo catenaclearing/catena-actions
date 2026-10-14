@@ -161,16 +161,30 @@ export class LockStore {
     const heldByThisRun = runsBefore.has(settings.runToken);
     const otherRuns = [...runsBefore].filter((token) => token !== settings.runToken);
     if (otherRuns.length > 0) return heldByThisRun;
+    // If a sibling run of this holder joined in between, run_ids is back and the lock correctly stays.
+    const stillMineAndEmpty = "holder_key = :me AND (attribute_not_exists(run_ids) OR size(run_ids) = :zero)";
+    const hold = response.Attributes?.preempted_hold;
     try {
-      // If a sibling run of this holder joined in between, run_ids is back and the lock correctly stays.
-      await this.doc.send(
-        new DeleteCommand({
-          TableName: this.tableName,
-          Key: LOCK_KEY,
-          ConditionExpression: "holder_key = :me AND (attribute_not_exists(run_ids) OR size(run_ids) = :zero)",
-          ExpressionAttributeValues: { ":me": settings.holderKey, ":zero": 0 },
-        }),
-      );
+      if (hold && Number(hold.expires_at) >= this.now()) {
+        // This lease preempted a manual hold that has not run out: give it back, so the holder still has dev.
+        await this.doc.send(
+          new PutCommand({
+            TableName: this.tableName,
+            Item: { ...hold, ...LOCK_KEY, preempted_by: response.Attributes.preempted_by, preempted_at: response.Attributes.preempted_at },
+            ConditionExpression: stillMineAndEmpty,
+            ExpressionAttributeValues: { ":me": settings.holderKey, ":zero": 0 },
+          }),
+        );
+      } else {
+        await this.doc.send(
+          new DeleteCommand({
+            TableName: this.tableName,
+            Key: LOCK_KEY,
+            ConditionExpression: stillMineAndEmpty,
+            ExpressionAttributeValues: { ":me": settings.holderKey, ":zero": 0 },
+          }),
+        );
+      }
     } catch (error) {
       if (!isConditionFailure(error)) throw error;
     }
@@ -178,21 +192,49 @@ export class LockStore {
   }
 
   /**
-   * Tell a manual holder (via the Slack Lambda) that a merge to main deployed over their hold.
+   * Take the lock over from a manual hold, for a merge to main that must not wait on it.
    *
-   * Returns whether that hold is still the live lock and was stamped. False means it ended (or was replaced) since the
-   * caller read it, so there is nobody to preempt and the caller must look at the lock again.
+   * The run becomes an ordinary CI holder (so its siblings can join, every other deploy waits behind it, and its post
+   * step releases it), and the hold is kept in `preempted_hold` so release can give it back. `preempted_by` and
+   * `preempted_at` are how the Slack Lambda tells the holder.
+   *
+   * Returns whether it took over. False means the hold ended, changed or was replaced since it was read, so the caller
+   * must look at the lock again.
    */
-  async markPreempted(holderKey, by) {
+  async takeOverHold(settings, holderKey) {
     const now = this.now();
+    const { Item: hold } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: LOCK_KEY, ConsistentRead: true }));
+    if (!hold || hold.holder_key !== holderKey || hold.holder_type !== "manual" || Number(hold.expires_at) < now) return false;
+    const { pk, sk, ...kept } = hold;
+    const item = {
+      ...LOCK_KEY,
+      holder_type: "ci",
+      holder_key: settings.holderKey,
+      run_ids: new Set([settings.runToken]),
+      repo: settings.repo,
+      actor: settings.actor,
+      ref: settings.ref,
+      started_at: now,
+      expires_at: now + settings.ttlSeconds,
+      preempted_by: settings.runUrl,
+      preempted_at: now,
+      preempted_hold: kept,
+    };
+    if (settings.prUrl) item.pr_url = settings.prUrl;
     try {
       await this.doc.send(
-        new UpdateCommand({
+        new PutCommand({
           TableName: this.tableName,
-          Key: LOCK_KEY,
-          UpdateExpression: "SET preempted_by = :by, preempted_at = :now",
-          ConditionExpression: "holder_key = :hk AND expires_at >= :now",
-          ExpressionAttributeValues: { ":by": by, ":now": now, ":hk": holderKey },
+          Item: item,
+          // Exactly the hold that was read, still live: an unlock, an extension or a new holder in between all fail this.
+          ConditionExpression: "holder_type = :manual AND holder_key = :hk AND started_at = :started AND expires_at = :expires AND expires_at >= :now",
+          ExpressionAttributeValues: {
+            ":manual": "manual",
+            ":hk": holderKey,
+            ":started": hold.started_at,
+            ":expires": hold.expires_at,
+            ":now": now,
+          },
         }),
       );
     } catch (error) {

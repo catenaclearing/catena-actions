@@ -38,13 +38,17 @@ async function tookLock(settings, store, out, mode) {
   } catch {
     out.warning("dev-lock acquired the lock but could not clear its queue entry; continuing with the lock held.");
   }
+  out.notice(`Holding the dev lock for ${settings.holderKey} (mode: ${mode}).`);
   return 0;
 }
 
 /** Returned instead of an exit code when the lock changed under us and should be read again straight away. */
 const LOOK_AGAIN = Symbol("look again");
 
-/** Act on a live lock held by someone else. Returns the exit code, null to keep waiting, or LOOK_AGAIN. */
+/** Returned when this run took the lock over from a manual hold: it holds the lock, and has set its own outputs. */
+const PREEMPTED = Symbol("preempted");
+
+/** Act on a live lock held by someone else. Returns the exit code, null to keep waiting, LOOK_AGAIN or PREEMPTED. */
 async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) {
   const decision = decide(mode, lock.holderType, { isMainPush: settings.isMainPush });
   const holder = `${holderLabel(lock)}, ${timing(lock, clock.now())}`;
@@ -55,15 +59,18 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
   }
 
   if (decision === Decision.PREEMPT) {
-    // If the hold ended since we read it there is nothing to preempt, and someone else may have taken the lock in the
-    // meantime: going ahead now would deploy alongside them without waiting. Look at the lock again instead.
-    if (!(await store.markPreempted(lock.holderKey, settings.runUrl))) return LOOK_AGAIN;
+    // Take the lock over, so nothing else can deploy until this run's post step releases it (which gives the hold back).
+    // If the hold ended or changed since we read it there is nothing to preempt, and someone else may have taken the
+    // lock in the meantime: look at the lock again instead of deploying alongside them.
+    if (!(await store.takeOverHold(settings, lock.holderKey))) return LOOK_AGAIN;
     await store.removeQueueEntries(settings.holderKey, ["poll"]);
+    out.setOutput("acquired", "true");
+    out.setOutput("blocked", "false");
     out.warning(
       `Dev is held by ${holder}. A merge to main must not be stalled by a manual hold (production waits on this deploy), ` +
-        `so it is going ahead; ${lock.actor} has been told.`,
+        `so it has taken the lock over until it finishes; ${lock.actor} has been told and gets the hold back afterwards.`,
     );
-    return 0;
+    return PREEMPTED;
   }
 
   if (decision === Decision.BLOCK) {
@@ -117,6 +124,7 @@ export async function acquire(settings, store, clock, out) {
     }
 
     const exitCode = await heldBySomeoneElse(settings, store, clock, out, mode, lock, wait);
+    if (exitCode === PREEMPTED) return 0;
     if (exitCode === LOOK_AGAIN) {
       lostRace();
       continue;

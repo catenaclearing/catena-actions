@@ -1,9 +1,10 @@
 // Properties of the store that an emulator cannot show on its own, so these look at how it talks to DynamoDB.
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release } from "../src/runner.js";
 import { Lock, LockStore } from "../src/store.js";
-import { Lab, START, githubEnv } from "./support.js";
+import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
 const lab = new Lab();
 before(() => lab.start());
@@ -112,62 +113,94 @@ describe("queue order", () => {
   });
 });
 
-describe("LockStore.markPreempted", () => {
-  const url = "https://github.com/catenaclearing/telematics-data-service/actions/runs/1001";
+describe("LockStore.takeOverHold", () => {
+  const take = (ctx) => {
+    const { settings, store } = ctx.make(mainPushEnv());
+    return { settings, taken: () => store.takeOverHold(settings, "manual#U123") };
+  };
 
-  it("stamps a live hold and says so", async () => {
+  it("turns a live hold into a lease held by this run, and keeps the hold", async () => {
     const ctx = await lab.fresh();
     await ctx.holdAsManual();
-    const { store } = ctx.make();
+    const { settings, taken } = take(ctx);
 
-    assert.equal(await store.markPreempted("manual#U123", url), true);
+    assert.equal(await taken(), true);
 
     const lock = await ctx.currentLock();
-    assert.equal(lock.preempted_by, url);
+    assert.equal(lock.holder_key, settings.holderKey);
+    assert.equal(lock.expires_at, START + settings.ttlSeconds);
+    assert.equal(lock.preempted_by, settings.runUrl);
     assert.equal(lock.preempted_at, START);
+    assert.deepEqual(lock.preempted_hold, {
+      holder_type: "manual",
+      holder_key: "manual#U123",
+      actor: "U123",
+      reason: "testing the new connector",
+      started_at: START - 60,
+      expires_at: START + 7200,
+    });
   });
 
   it("says no, and writes nothing, when the lock has gone", async () => {
     const ctx = await lab.fresh();
-    const { store } = ctx.make();
 
-    assert.equal(await store.markPreempted("manual#U123", url), false);
+    assert.equal(await take(ctx).taken(), false);
 
     assert.equal(await ctx.currentLock(), null); // a failed condition must not create the item
   });
 
   it("says no, and writes nothing, when someone else holds the lock now", async () => {
     const ctx = await lab.fresh();
-    await ctx.holdAsCi();
-    const { store } = ctx.make();
+    const bob = await ctx.holdAsCi();
 
-    assert.equal(await store.markPreempted("manual#U123", url), false);
+    assert.equal(await take(ctx).taken(), false);
 
-    assert.equal((await ctx.currentLock()).preempted_by, undefined);
+    assert.equal((await ctx.currentLock()).holder_key, bob);
   });
 
   it("says no when the hold has expired, even though its item is still there", async () => {
     const ctx = await lab.fresh();
     await ctx.holdAsManual({ expiresAt: START - 1 });
-    const { store } = ctx.make();
 
-    assert.equal(await store.markPreempted("manual#U123", url), false);
+    assert.equal(await take(ctx).taken(), false);
 
-    assert.equal((await ctx.currentLock()).preempted_by, undefined);
+    assert.equal((await ctx.currentLock()).holder_type, "manual");
   });
 
   it("is still live in the second the hold expires (the same whole-second rule as every other write)", async () => {
     const ctx = await lab.fresh();
     await ctx.holdAsManual({ expiresAt: START });
-    const { store } = ctx.make();
 
-    assert.equal(await store.markPreempted("manual#U123", url), true);
+    assert.equal(await take(ctx).taken(), true);
+  });
+
+  it("says no when the hold changed between its read and its write", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual();
+    const { settings } = ctx.make(mainPushEnv());
+    let changed = false;
+    const doc = {
+      send: async (command) => {
+        const response = await ctx.doc.send(command);
+        if (!changed && command instanceof GetCommand) {
+          changed = true;
+          await ctx.holdAsManual({ expiresAt: START + 9000 }); // `/dev extend`
+        }
+        return response;
+      },
+    };
+    const store = new LockStore(doc, ctx.tableName, () => ctx.clock.now());
+
+    assert.equal(await store.takeOverHold(settings, "manual#U123"), false);
+
+    assert.equal((await ctx.currentLock()).holder_type, "manual");
   });
 
   it("does not hide a real error as a lost race", async () => {
     const ctx = await lab.fresh();
+    const { settings } = ctx.make(mainPushEnv());
     const broken = new LockStore({ send: async () => Promise.reject(Object.assign(new Error("no"), { name: "AccessDeniedException" })) }, ctx.tableName, () => ctx.clock.now());
 
-    await assert.rejects(broken.markPreempted("manual#U123", url), /no/);
+    await assert.rejects(broken.takeOverHold(settings, "manual#U123"), /no/);
   });
 });

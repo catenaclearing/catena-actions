@@ -274,7 +274,7 @@ describe("merge to main", () => {
     assert.ok(seen.every((kinds) => kinds.length === 1 && kinds[0] === "poll"));
   });
 
-  it("goes ahead over a manual hold and tells the holder", async () => {
+  it("goes ahead over a manual hold by taking the lock over, and tells the holder", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
     await ctx.holdAsManual();
@@ -283,11 +283,54 @@ describe("merge to main", () => {
     assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
 
     const lock = await ctx.currentLock();
-    assert.equal(lock.holder_key, "manual#U123"); // the hold stays
+    assert.equal(lock.holder_type, "ci"); // this run holds the lock until its post step
+    assert.equal(lock.holder_key, settings.holderKey);
+    assert.deepEqual([...lock.run_ids], [settings.runToken]);
     assert.equal(lock.preempted_by, settings.runUrl);
+    assert.equal(lock.preempted_hold.holder_key, "manual#U123"); // kept, to give back
+    assert.equal(lock.preempted_hold.reason, "testing the new connector");
     assert.deepEqual(ctx.clock.slept, []); // did not wait
     assert.ok(levels(ctx.out).includes("warning"));
-    assert.equal(ctx.out.outputs.acquired, "false");
+    assert.equal(ctx.out.outputs.acquired, "true");
+    assert.equal(ctx.out.outputs.blocked, "false");
+  });
+
+  it("while it deploys over a manual hold, a PR deploy is blocked even if the hold is unlocked or runs out", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual({ expiresAt: START + 10 });
+    const merge = ctx.make(mainPushEnv());
+    assert.equal(await acquire(merge.settings, merge.store, ctx.clock, ctx.out), 0);
+    ctx.clock.current = START + 60; // the manual hold would have run out by now
+
+    const pr = ctx.make(githubEnv({ GITHUB_ACTOR: "dave", GITHUB_RUN_ID: "3003" }));
+    assert.equal(await acquire(pr.settings, pr.store, ctx.clock, ctx.out), 1);
+    assert.equal((await ctx.currentLock()).holder_key, merge.settings.holderKey);
+  });
+
+  it("a second merge to main waits behind one that is deploying over a manual hold", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const first = ctx.make(mainPushEnv());
+    assert.equal(await acquire(first.settings, first.store, ctx.clock, ctx.out), 0);
+
+    const second = ctx.make(mainPushEnv({ GITHUB_ACTOR: "erin", GITHUB_RUN_ID: "4004" }));
+    assert.equal(await acquire(second.settings, second.store, ctx.clock, ctx.out), 1);
+    assert.ok(ctx.clock.slept.length > 0, "it should have waited, not preempted");
+    assert.equal((await ctx.currentLock()).holder_key, first.settings.holderKey);
+  });
+
+  it("sibling runs of the preempting merge join its lease instead of waiting on it", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const first = ctx.make(mainPushEnv());
+    assert.equal(await acquire(first.settings, first.store, ctx.clock, ctx.out), 0);
+
+    const sibling = ctx.make(mainPushEnv({ GITHUB_JOB: "deploy-development-2" }));
+    assert.equal(await acquire(sibling.settings, sibling.store, ctx.clock, ctx.out), 0);
+    assert.equal((await ctx.currentLock()).run_ids.size, 2);
   });
 
   it("notices a manual hold that appears while it waits", async () => {
@@ -302,7 +345,8 @@ describe("merge to main", () => {
     };
 
     assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
-    assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey); // took it over
+    assert.equal((await ctx.currentLock()).preempted_hold.holder_key, "manual#U123");
     assert.equal(ctx.clock.slept.length, 1);
     assert.deepEqual(await ctx.queueItems(), []); // it had been waiting; going ahead must not leave its waiting entry behind
   });

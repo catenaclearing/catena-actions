@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { acquire, release } from "../src/runner.js";
-import { Lab, START, githubEnv } from "./support.js";
+import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
 const lab = new Lab();
 before(() => lab.start());
@@ -171,5 +171,55 @@ describe("LockStore.release", () => {
 
     assert.equal(await otherRun.store.release(otherRun.settings), false);
     assert.equal(await holder.store.release(holder.settings), true);
+  });
+});
+
+describe("releasing a lease that preempted a manual hold", () => {
+  it("gives the hold back, still marked as preempted, when it has not run out", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const { settings, store } = ctx.make(mainPushEnv());
+    await acquire(settings, store, ctx.clock, ctx.out);
+
+    await release(settings, store, ctx.out);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_type, "manual");
+    assert.equal(lock.holder_key, "manual#U123");
+    assert.equal(lock.reason, "testing the new connector");
+    assert.equal(lock.expires_at, START + 7200);
+    assert.equal(lock.preempted_by, settings.runUrl);
+    assert.equal(lock.run_ids, undefined);
+    assert.equal(lock.preempted_hold, undefined);
+  });
+
+  it("frees the lock when the hold ran out during the deploy", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual({ expiresAt: START + 10 });
+    const { settings, store } = ctx.make(mainPushEnv());
+    await acquire(settings, store, ctx.clock, ctx.out);
+    ctx.clock.current = START + 60;
+
+    await release(settings, store, ctx.out);
+
+    assert.equal(await ctx.currentLock(), null);
+  });
+
+  it("keeps the lease while a sibling run is still deploying, and gives the hold back after the last one", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const first = ctx.make(mainPushEnv());
+    const sibling = ctx.make(mainPushEnv({ GITHUB_JOB: "deploy-development-2" }));
+    await acquire(first.settings, first.store, ctx.clock, ctx.out);
+    await acquire(sibling.settings, sibling.store, ctx.clock, ctx.out);
+
+    await release(first.settings, first.store, ctx.out);
+    assert.equal((await ctx.currentLock()).holder_key, first.settings.holderKey);
+
+    await release(sibling.settings, sibling.store, ctx.out);
+    assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
   });
 });

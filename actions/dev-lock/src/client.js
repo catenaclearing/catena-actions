@@ -1,5 +1,6 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { LockStore } from "./store.js";
 
 /** How long one attempt may take before it is abandoned, and how many attempts a call gets. */
@@ -22,7 +23,7 @@ export function createDocumentClient(settings, env = process.env, limits = LIMIT
   const client = new DynamoDBClient({
     region: settings.region,
     maxAttempts: limits.maxAttempts,
-    requestHandler: requestHandlerOptions(limits),
+    requestHandler: new NodeHttpHandler(requestHandlerOptions(limits)),
     ...(env.AWS_ENDPOINT_URL ? { endpoint: env.AWS_ENDPOINT_URL } : {}),
   });
   return DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
