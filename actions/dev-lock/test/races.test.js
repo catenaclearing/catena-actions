@@ -272,6 +272,37 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
     assert.equal(mine[0].kind, "poll"); // refreshed by this run
   });
 
+  it("does not delete a sibling's newly claimed entry after confirming a stale claim", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const { settings } = ctx.make();
+    const duplicateSk = sk(START - 10);
+    await ctx.put({ pk: "QUEUE#dev", sk: duplicateSk, kind: "notify", holder_key: holder(), ttl: START + 3600 });
+    let siblingEnqueued = false;
+    const racing = {
+      send: async (command) => {
+        const response = await ctx.doc.send(command);
+        if (!siblingEnqueued && command instanceof QueryCommand && command.input.ExpressionAttributeValues[":pk"] === "QUEUE#dev") {
+          siblingEnqueued = true;
+          const claim = await ctx.queueClaim(holder());
+          const entry = (await ctx.queueItems()).find((item) => item.sk === claim.entry_sk);
+          await ctx.put({ ...entry, ttl: START - 1 });
+          ctx.clock.current += 1;
+          await ctx.make(githubEnv({ GITHUB_RUN_ID: "1002" })).store.enqueue(settings, "notify");
+        }
+        return response;
+      },
+    };
+    const store = new LockStore(racing, ctx.tableName, () => ctx.clock.now());
+
+    assert.equal(await store.enqueue(settings, "notify"), 1);
+
+    const claim = await ctx.queueClaim(holder());
+    const mine = (await ctx.queueItems()).filter((item) => item.holder_key === holder());
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].sk, claim.entry_sk);
+  });
+
   it("an entry deleted behind the claim's back (the Slack bot, or TTL) is replaced at the back of the queue", async () => {
     const ctx = await lab.fresh();
     await ctx.holdAsCi();

@@ -1,4 +1,4 @@
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 export const LOCK_KEY = Object.freeze({ pk: "LOCK#dev", sk: "CURRENT" });
 export const CONFIG_KEY = Object.freeze({ pk: "CONFIG", sk: "mode" });
@@ -114,9 +114,6 @@ export class LockStore {
 
   /**
    * Add this run to a lock its own holder already has, and push the expiry out to at least this run's TTL.
-   *
-   * Two writes, so that joining never shortens the lease: a sibling with a longer TTL (or one that refreshed later)
-   * keeps its expiry. A single `SET expires_at` would overwrite it with whatever this run computed.
    */
   async joinIfMine(settings) {
     const now = this.now();
@@ -126,27 +123,32 @@ export class LockStore {
         new UpdateCommand({
           TableName: this.tableName,
           Key: LOCK_KEY,
-          UpdateExpression: "ADD run_ids :run",
-          ConditionExpression: "holder_key = :me AND expires_at >= :now",
-          ExpressionAttributeValues: { ":run": new Set([settings.runToken]), ":me": settings.holderKey, ":now": now },
+          UpdateExpression: "SET expires_at = :expires ADD run_ids :run",
+          ConditionExpression: "holder_key = :me AND expires_at >= :now AND expires_at < :expires",
+          ExpressionAttributeValues: {
+            ":run": new Set([settings.runToken]),
+            ":me": settings.holderKey,
+            ":now": now,
+            ":expires": expires,
+          },
         }),
       );
     } catch (error) {
-      if (isConditionFailure(error)) return false;
-      throw error;
-    }
-    try {
-      await this.doc.send(
-        new UpdateCommand({
-          TableName: this.tableName,
-          Key: LOCK_KEY,
-          UpdateExpression: "SET expires_at = :expires",
-          ConditionExpression: "holder_key = :me AND expires_at < :expires",
-          ExpressionAttributeValues: { ":expires": expires, ":me": settings.holderKey },
-        }),
-      );
-    } catch (error) {
-      if (!isConditionFailure(error)) throw error; // already lasts at least that long
+      if (!isConditionFailure(error)) throw error;
+      try {
+        await this.doc.send(
+          new UpdateCommand({
+            TableName: this.tableName,
+            Key: LOCK_KEY,
+            UpdateExpression: "ADD run_ids :run",
+            ConditionExpression: "holder_key = :me AND expires_at >= :now AND expires_at >= :expires",
+            ExpressionAttributeValues: { ":run": new Set([settings.runToken]), ":me": settings.holderKey, ":now": now, ":expires": expires },
+          }),
+        );
+      } catch (fallbackError) {
+        if (isConditionFailure(fallbackError)) return false;
+        throw fallbackError;
+      }
     }
     return true;
   }
@@ -329,9 +331,14 @@ export class LockStore {
         continue;
       }
       const live = await this.#liveQueue();
+      let claimMoved = false;
       for (const entry of live.filter((e) => e.holder_key === settings.holderKey && e.sk !== sk)) {
-        await this.#deleteEntry(entry.sk); // a leftover from a run that lost the claim and has not cleaned up yet
+        if (!(await this.#deleteDuplicate(settings.holderKey, sk, entry.sk))) {
+          claimMoved = true;
+          break;
+        }
       }
+      if (claimMoved) continue;
       // Count holders, not entries, so another holder's leftover (mid-race) does not push everyone behind it back.
       const holders = [...new Set(live.map((entry) => entry.holder_key))];
       return holders.indexOf(settings.holderKey) + 1;
@@ -417,6 +424,36 @@ export class LockStore {
 
   async #deleteEntry(sk) {
     await this.doc.send(new DeleteCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk } }));
+  }
+
+  /** Delete a leftover only while the claim still points at this run's confirmed entry. */
+  async #deleteDuplicate(holderKey, confirmedSk, duplicateSk) {
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              ConditionCheck: {
+                TableName: this.tableName,
+                Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+                ConditionExpression: "entry_sk = :sk",
+                ExpressionAttributeValues: { ":sk": confirmedSk },
+              },
+            },
+            { Delete: { TableName: this.tableName, Key: { pk: QUEUE_PK, sk: duplicateSk } } },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (error?.name === "TransactionCanceledException") {
+        const { Item: claim } = await this.doc.send(
+          new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_CLAIM_PK, sk: holderKey }, ConsistentRead: true }),
+        );
+        if (claim?.entry_sk !== confirmedSk) return false;
+      }
+      throw error;
+    }
+    return true;
   }
 
   /** Remove a holder's queue entries of the given kinds, and its claim when that named one of them. */

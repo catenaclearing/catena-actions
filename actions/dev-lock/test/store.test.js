@@ -231,6 +231,34 @@ describe("LockStore.joinIfMine", () => {
     assert.equal((await ctx.currentLock()).expires_at, START + 300 + 600);
   });
 
+  it("does not join a replacement lock after the extension condition fails", async () => {
+    const ctx = await lab.fresh();
+    const first = ctx.make(githubEnv({ INPUT_TTL_MINUTES: "60" }));
+    const joining = ctx.make(githubEnv({ GITHUB_JOB: "sibling", INPUT_TTL_MINUTES: "60" }));
+    await first.store.putIfFree(first.settings);
+    let replaced = false;
+    const racing = {
+      send: async (command) => {
+        try {
+          return await ctx.doc.send(command);
+        } catch (error) {
+          if (!replaced && command.constructor.name === "UpdateCommand" && error.name === "ConditionalCheckFailedException") {
+            replaced = true;
+            await ctx.holdAsCi();
+          }
+          throw error;
+        }
+      },
+    };
+    const store = new LockStore(racing, ctx.tableName, () => ctx.clock.now());
+
+    assert.equal(await store.joinIfMine(joining.settings), false);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.run_ids.has(joining.settings.runToken), false);
+    assert.equal(lock.holder_key, "ci#catenaclearing/catena-platform#bob#refs/pull/7/merge");
+  });
+
   it("does not join someone else's lock, or an expired one of its own", async () => {
     const ctx = await lab.fresh();
     const { settings, store } = ctx.make();

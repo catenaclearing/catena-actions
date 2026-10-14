@@ -142,7 +142,8 @@ export async function acquire(settings, store, clock, out) {
       out.setOutput("blocked", exitCode ? "true" : "false");
       return exitCode;
     }
-    await clock.sleep(settings.pollSeconds);
+    const remaining = Math.max(0, settings.waitSeconds - (clock.now() - wait.since));
+    await clock.sleep(Math.min(settings.pollSeconds, remaining));
   }
 }
 

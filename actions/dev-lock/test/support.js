@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import dynalite from "dynalite";
 import { CreateTableCommand, DescribeTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { Settings } from "../src/config.js";
 import { Output } from "../src/github.js";
 import { LockStore } from "../src/store.js";
@@ -64,7 +64,26 @@ export class Lab {
       credentials: { accessKeyId: "test", secretAccessKey: "test" },
       maxAttempts: 1,
     });
-    this.doc = DynamoDBDocumentClient.from(this.raw);
+    const doc = DynamoDBDocumentClient.from(this.raw);
+    let pending = Promise.resolve();
+    this.doc = {
+      send: (command) => {
+        const operation = pending.then(async () => {
+          if (!(command instanceof TransactWriteCommand)) return doc.send(command);
+          const [{ ConditionCheck }, { Delete }] = command.input.TransactItems;
+          const { Item: claim } = await doc.send(
+            new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
+          );
+          if (claim?.entry_sk !== ConditionCheck.ExpressionAttributeValues[":sk"]) {
+            throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+          }
+          await doc.send(new DeleteCommand(Delete));
+          return {};
+        });
+        pending = operation.catch(() => {});
+        return operation;
+      },
+    };
   }
 
   async stop() {

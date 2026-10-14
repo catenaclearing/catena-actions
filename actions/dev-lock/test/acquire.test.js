@@ -256,6 +256,17 @@ describe("merge to main", () => {
     assert.deepEqual(await ctx.queueItems(), []); // a waiting entry is not left behind
   });
 
+  it("caps a poll interval at the remaining wait budget", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const { settings, store } = ctx.make(mainPushEnv({ INPUT_WAIT_MINUTES: "1", INPUT_POLL_SECONDS: "120" }));
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 1);
+
+    assert.deepEqual(ctx.clock.slept, [60]);
+  });
+
   it("is in the queue as a poll entry while it waits", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
