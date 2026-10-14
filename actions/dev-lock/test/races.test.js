@@ -1,7 +1,7 @@
 // The timing-sensitive paths: another run changing the lock between two of our calls.
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release, run } from "../src/runner.js";
 import { LockStore } from "../src/store.js";
 import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
@@ -209,7 +209,7 @@ describe("two runs of one holder queueing at the same moment", () => {
 
     const mine = (await ctx.queueItems()).filter((entry) => entry.holder_key === runs[0].settings.holderKey);
     assert.equal(mine.length, 1);
-    assert.equal(mine[0].sk, `${String((START * 1000) + 1).padStart(13, "0")}#${runs[0].settings.holderKey}`); // the earliest stays
+    assert.equal(mine[0].sk, (await ctx.queueClaim(runs[0].settings.holderKey)).entry_sk); // the one the claim names
     assert.deepEqual(positions, [2, 2]);
   });
 
@@ -224,6 +224,117 @@ describe("two runs of one holder queueing at the same moment", () => {
     const { settings, store } = ctx.make();
 
     assert.equal(await store.enqueue(settings, "notify"), 2);
+  });
+});
+
+describe("a holder's queue entry under concurrent runs (the claim item)", () => {
+  const holder = () => "ci#catenaclearing/telematics-data-service#alice#refs/pull/42/merge";
+  const sk = (seconds, key = holder()) => `${String(seconds * 1000).padStart(13, "0")}#${key}`;
+
+  it("two runs that both see two entries of their holder never delete both (the cleanup is anchored to the claim)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    // Leftovers from a crash: two entries, and the claim names the later one.
+    for (const at of [START - 20, START - 10]) {
+      await ctx.put({ pk: "QUEUE#dev", sk: sk(at), kind: "notify", holder_key: holder(), heartbeat_at: START, ttl: START + 3600 });
+    }
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: sk(START - 10), ttl: START + 3600 });
+    const runs = ["1001", "1002"].map((id) => ctx.make(githubEnv({ GITHUB_RUN_ID: id })));
+
+    const positions = await Promise.all(runs.map(({ settings, store }) => store.enqueue(settings, "notify")));
+
+    const mine = (await ctx.queueItems()).filter((entry) => entry.holder_key === holder());
+    assert.deepEqual(mine.map((entry) => entry.sk), [sk(START - 10)]);
+    assert.deepEqual(positions, [1, 1]);
+  });
+
+  it("a run whose claim was taken over while it wrote removes its own entry and joins the new one", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    let moved = false;
+    const doc = {
+      send: async (command) => {
+        // Right after this run writes its entry, another run of the holder moves the claim to a newer entry.
+        if (!moved && command instanceof UpdateCommand && command.input.Key.pk === "QUEUE_CLAIM#dev") {
+          moved = true;
+          await ctx.put({ pk: "QUEUE#dev", sk: sk(START + 5), kind: "notify", holder_key: holder(), heartbeat_at: START, ttl: START + 3600 });
+          await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: sk(START + 5), ttl: START + 3600 });
+        }
+        return ctx.doc.send(command);
+      },
+    };
+    const { settings, store } = ctx.make(githubEnv(), {}, doc);
+
+    assert.equal(await store.enqueue(settings, "poll"), 1);
+
+    const mine = (await ctx.queueItems()).filter((entry) => entry.holder_key === holder());
+    assert.deepEqual(mine.map((entry) => entry.sk), [sk(START + 5)]);
+    assert.equal(mine[0].kind, "poll"); // refreshed by this run
+  });
+
+  it("an entry deleted behind the claim's back (the Slack bot, or TTL) is replaced at the back of the queue", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const other = "ci#catenaclearing/other#carol#refs/pull/9/merge";
+    await ctx.put({ pk: "QUEUE#dev", sk: sk(START - 30, other), kind: "notify", holder_key: other, ttl: START + 3600 });
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: sk(START - 60), ttl: START + 3600 }); // entry gone
+    const { settings, store } = ctx.make();
+
+    assert.equal(await store.enqueue(settings, "notify"), 2);
+
+    assert.equal((await ctx.queueClaim(holder())).entry_sk, sk(START));
+  });
+
+  it("a dead (stale poll) entry is replaced, not revived, and is deleted", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    await ctx.put({ pk: "QUEUE#dev", sk: sk(START - 600), kind: "poll", holder_key: holder(), heartbeat_at: START - 600, ttl: START + 3600 });
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: sk(START - 600), ttl: START + 3600 });
+    const { settings, store } = ctx.make();
+
+    await store.enqueue(settings, "poll");
+
+    assert.deepEqual((await ctx.queueItems()).map((entry) => entry.sk), [sk(START)]);
+  });
+
+  it("leaving the queue removes the claim too, so the next block starts a fresh entry", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const { settings, store } = ctx.make();
+    await store.enqueue(settings, "notify");
+
+    await store.removeQueueEntries(settings.holderKey);
+
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(await ctx.queueClaim(settings.holderKey), null);
+  });
+
+  it("removing only `poll` entries keeps the claim of a `notify` entry", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const { settings, store } = ctx.make();
+    await store.enqueue(settings, "notify");
+
+    await store.removeQueueEntries(settings.holderKey, ["poll"]);
+
+    assert.equal((await ctx.queueItems()).length, 1);
+    assert.equal((await ctx.queueClaim(settings.holderKey)).entry_sk, (await ctx.queueItems())[0].sk);
+  });
+
+  it("a claim that keeps moving ends in a failed-open run, not a loop", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const doc = {
+      send: async (command) => {
+        if (command instanceof UpdateCommand && command.input.Key.pk === "QUEUE_CLAIM#dev") {
+          await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: `elsewhere-${Math.random()}`, ttl: START + 3600 });
+        }
+        return ctx.doc.send(command);
+      },
+    };
+    const { settings, store } = ctx.make(githubEnv(), {}, doc);
+
+    await assert.rejects(store.enqueue(settings, "notify"), /kept changing/);
   });
 });
 
@@ -258,4 +369,98 @@ describe("sub-second time: the store compares whole seconds, so the runner must 
       assert.match(ctx.out.messages.at(-1)[1], /bob/);
     });
   }
+});
+
+describe("a manual hold that ends while a merge to main is preempting it", () => {
+  /** A client that runs `afterRead` once, right after the first read of the lock: the moment the run has decided what it saw. */
+  function afterFirstLockRead(doc, afterRead) {
+    let fired = false;
+    return {
+      send: async (command) => {
+        const response = await doc.send(command);
+        if (!fired && command instanceof GetCommand && command.input.Key.pk === "LOCK#dev") {
+          fired = true;
+          await afterRead();
+        }
+        return response;
+      },
+    };
+  }
+
+  const told = (ctx) => ctx.out.messages.some(([, message]) => message.includes("has been told"));
+
+  it("waits for the CI deploy that took the lock in between, instead of deploying alongside it", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const doc = afterFirstLockRead(ctx.doc, async () => {
+      await ctx.deleteLock(); // `/dev unlock`
+      await ctx.holdAsCi({ expiresAt: START + 100 }); // and a PR deploy takes the lock straight away
+    });
+    const { settings, store } = ctx.make(mainPushEnv(), {}, doc);
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.ok(ctx.clock.slept.length > 0, "it should have waited for bob's deploy");
+    assert.equal(ctx.out.outputs.acquired, "true"); // and then took the lock when bob's expired
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+    assert.equal(told(ctx), false); // nobody was preempted, so nobody was told
+  });
+
+  it("gives up like any merge to main behind a CI deploy when that deploy does not end", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const doc = afterFirstLockRead(ctx.doc, async () => {
+      await ctx.deleteLock();
+      await ctx.holdAsCi({ expiresAt: START + 999_999 });
+    });
+    const { settings, store } = ctx.make(mainPushEnv(), {}, doc);
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 1);
+
+    assert.equal(ctx.out.outputs.blocked, "true");
+    assert.equal((await ctx.currentLock()).holder_key, "ci#catenaclearing/catena-platform#bob#refs/pull/7/merge"); // untouched
+    assert.equal((await ctx.currentLock()).preempted_by, undefined);
+  });
+
+  it("takes the lock when the hold ended and nobody else did", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const doc = afterFirstLockRead(ctx.doc, () => ctx.deleteLock());
+    const { settings, store } = ctx.make(mainPushEnv(), {}, doc);
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.equal(ctx.out.outputs.acquired, "true");
+    assert.deepEqual(ctx.clock.slept, []); // no waiting needed
+    assert.equal(told(ctx), false);
+  });
+
+  it("does not stamp a hold that expired in the meantime", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual({ expiresAt: START + 1 });
+    const doc = afterFirstLockRead(ctx.doc, async () => {
+      ctx.clock.current = START + 5; // the hold runs out between the read and the stamp
+    });
+    const { settings, store } = ctx.make(mainPushEnv(), {}, doc);
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.equal(ctx.out.outputs.acquired, "true");
+    assert.equal(told(ctx), false);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+  });
+
+  it("looking again is bounded: a hold that keeps vanishing ends in a failed-open run, not a loop", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const { settings, store } = ctx.make(mainPushEnv());
+    store.markPreempted = async () => false; // the hold is gone every time it is stamped, yet getLock keeps finding one
+
+    await assert.rejects(acquire(settings, store, ctx.clock, ctx.out), /kept changing/);
+  });
 });

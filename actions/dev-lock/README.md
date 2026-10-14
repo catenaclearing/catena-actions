@@ -36,12 +36,17 @@ action.
 | Held by a manual hold, **merge to main** | warn, deploy anyway | deploy anyway, and tell the holder |
 
 A merge to main is never stalled by a manual hold because production deploys wait on the dev deploy
-(`deploy-production` has `needs: deploy-development`).
+(`deploy-production` has `needs: deploy-development`). It only goes ahead over a hold that is still there when it
+stamps it: if the hold ends in between (`/dev unlock`, or it expires) the run reads the lock again, which takes the
+lock or, if a CI deploy got there first, waits behind it like any other merge to main.
 
 A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
 Slack bot can ping that person when dev is free. Acquisition is first come, first served through a
 conditional write; the queue order is what the bot announces, it is not enforced by the lock. A holder has one queue
-entry: if two of its runs queue at the same moment, both keep the earliest entry and delete the other.
+entry, named by a claim item (`pk = QUEUE_CLAIM#dev`, `sk = <holder_key>`, `entry_sk`, `ttl`). The claim only moves by
+a conditional write, to a new entry, so when two runs of a holder queue at once they agree on one entry; any other entry
+of that holder is a leftover and is deleted, and the one the claim names never is. An entry that is gone or dead (a
+stale `poll`) is not revived: the holder gets a new entry at the back of the queue.
 
 ## Inputs and outputs
 
@@ -79,8 +84,14 @@ aws dynamodb put-item --table-name catena-dev-lock --item \
 Any error talking to the table (`AccessDenied`, missing table, throttling, timeouts, a bug in this
 action) becomes a `::warning::` and the deploy continues without the lock. Only a successful read that
 shows a live lock held by someone else can stop a deploy, and only in `enforce` mode. The post step never
-fails the job. With the table unreachable, a call adds a few seconds before giving up (3 attempts, 5 s
-connect and 10 s request timeouts).
+fails the job.
+
+A broken table is not free, though: each call gets 3 attempts with a 5 s connect timeout and a 10 s request timeout
+(`src/client.js`). Measured against the real bundle on Node 24, an address that never answers costs about 15 s per
+call, and a server that accepts the connection and then goes silent about 30 s. The first call decides, so a run
+pays that once for `acquire`, and once more in the post step. The SDK's `requestTimeout` only logs a warning unless
+the handler is told to throw (`throwOnRequestTimeout`, set in `requestHandlerOptions`); without that a silent
+server would hang the step until the job's own timeout. `test/client.test.js` guards it.
 
 An unknown command (a wiring bug) exits 2 on purpose.
 

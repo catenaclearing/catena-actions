@@ -3,8 +3,11 @@ import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } fr
 export const LOCK_KEY = Object.freeze({ pk: "LOCK#dev", sk: "CURRENT" });
 export const CONFIG_KEY = Object.freeze({ pk: "CONFIG", sk: "mode" });
 export const QUEUE_PK = "QUEUE#dev";
+export const QUEUE_CLAIM_PK = "QUEUE_CLAIM#dev"; // one item per holder, naming its single queue entry
 export const QUEUE_ENTRY_TTL_SECONDS = 4 * 60 * 60; // garbage collection only; entries are also removed explicitly
 export const POLL_ENTRY_STALE_SECONDS = 120; // a polling job refreshes its entry every few seconds; older means its runner died
+
+const MAX_QUEUE_RETRIES = 5;
 
 const isConditionFailure = (error) => error?.name === "ConditionalCheckFailedException";
 
@@ -174,21 +177,29 @@ export class LockStore {
     return heldByThisRun;
   }
 
-  /** Tell a manual holder (via the Slack Lambda) that a merge to main deployed over their hold. */
+  /**
+   * Tell a manual holder (via the Slack Lambda) that a merge to main deployed over their hold.
+   *
+   * Returns whether that hold is still the live lock and was stamped. False means it ended (or was replaced) since the
+   * caller read it, so there is nobody to preempt and the caller must look at the lock again.
+   */
   async markPreempted(holderKey, by) {
+    const now = this.now();
     try {
       await this.doc.send(
         new UpdateCommand({
           TableName: this.tableName,
           Key: LOCK_KEY,
           UpdateExpression: "SET preempted_by = :by, preempted_at = :now",
-          ConditionExpression: "holder_key = :hk",
-          ExpressionAttributeValues: { ":by": by, ":now": this.now(), ":hk": holderKey },
+          ConditionExpression: "holder_key = :hk AND expires_at >= :now",
+          ExpressionAttributeValues: { ":by": by, ":now": now, ":hk": holderKey },
         }),
       );
     } catch (error) {
-      if (!isConditionFailure(error)) throw error;
+      if (isConditionFailure(error)) return false;
+      throw error;
     }
+    return true;
   }
 
   // --- the queue --------------------------------------------------------------------------------------------------
@@ -222,54 +233,128 @@ export class LockStore {
    *
    * `notify`: a failed deploy asking to be pinged when dev is free (kept until it gets the lock or leaves).
    * `poll`: a deploy that is waiting in its job (removed when it stops waiting).
+   *
+   * A holder has one entry, named by its claim item (`QUEUE_CLAIM#dev` / holder key). The claim only ever moves by a
+   * conditional write, and only to a brand-new sort key, so every run of a holder agrees on which entry is the real one,
+   * and any other entry of that holder can be deleted without ever deleting the one the claim names.
    */
   async enqueue(settings, kind) {
+    for (let attempt = 0; attempt <= MAX_QUEUE_RETRIES; attempt += 1) {
+      const sk = await this.#claimEntry(settings);
+      if (sk === null) continue; // another run of this holder moved the claim first
+      await this.#writeEntry(settings, kind, sk);
+      if (!(await this.#confirmClaim(settings.holderKey, sk))) {
+        // The claim moved while we wrote (or the holder left the queue): this entry is not the holder's any more.
+        await this.#deleteEntry(sk);
+        continue;
+      }
+      const live = await this.#liveQueue();
+      for (const entry of live.filter((e) => e.holder_key === settings.holderKey && e.sk !== sk)) {
+        await this.#deleteEntry(entry.sk); // a leftover from a run that lost the claim and has not cleaned up yet
+      }
+      // Count holders, not entries, so another holder's leftover (mid-race) does not push everyone behind it back.
+      const holders = [...new Set(live.map((entry) => entry.holder_key))];
+      return holders.indexOf(settings.holderKey) + 1;
+    }
+    throw new Error("this deploy's queue entry kept changing while trying to write it");
+  }
+
+  /** Return the sort key of this holder's entry, claiming a new one when it has none (or only a dead one). Null on a lost race. */
+  async #claimEntry(settings) {
     const now = this.now();
-    const mine = (await this.#liveQueue()).filter((entry) => entry.holder_key === settings.holderKey);
-    if (mine.length > 0) {
+    const claimKey = { pk: QUEUE_CLAIM_PK, sk: settings.holderKey };
+    const { Item: claim } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: claimKey, ConsistentRead: true }));
+    if (claim) {
+      const { Item: entry } = await this.doc.send(
+        new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: claim.entry_sk }, ConsistentRead: true }),
+      );
+      if (entry && isLive(entry, now)) return claim.entry_sk;
+    }
+    // A missing or dead entry is not kept: the holder goes to the back of the queue, as a new arrival.
+    const sk = `${String(Math.floor(this.clock() * 1000)).padStart(13, "0")}#${settings.holderKey}`;
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...claimKey, entry_sk: sk, ttl: now + QUEUE_ENTRY_TTL_SECONDS },
+          ...(claim
+            ? { ConditionExpression: "entry_sk = :old", ExpressionAttributeValues: { ":old": claim.entry_sk } }
+            : { ConditionExpression: "attribute_not_exists(pk)" }),
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailure(error)) return null;
+      throw error;
+    }
+    if (claim && claim.entry_sk !== sk) await this.#deleteEntry(claim.entry_sk);
+    return sk;
+  }
+
+  /** Create or refresh the entry at `sk`. An upsert, so two runs writing the same entry leave one item. */
+  async #writeEntry(settings, kind, sk) {
+    const now = this.now();
+    const always = { kind, heartbeat_at: now, run_url: settings.runUrl, ttl: now + QUEUE_ENTRY_TTL_SECONDS };
+    const once = { holder_key: settings.holderKey, repo: settings.repo, actor: settings.actor, ref: settings.ref, enqueued_at: now };
+    if (settings.prUrl) once.pr_url = settings.prUrl;
+    const names = {};
+    const values = {};
+    const sets = [];
+    Object.entries({ ...always, ...once }).forEach(([field, value], i) => {
+      names[`#f${i}`] = field;
+      values[`:v${i}`] = value;
+      sets.push(field in always ? `#f${i} = :v${i}` : `#f${i} = if_not_exists(#f${i}, :v${i})`);
+    });
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { pk: QUEUE_PK, sk },
+        UpdateExpression: `SET ${sets.join(", ")}`,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+      }),
+    );
+  }
+
+  /** Check the claim still names `sk`, and keep it alive as long as the entry. */
+  async #confirmClaim(holderKey, sk) {
+    try {
       await this.doc.send(
         new UpdateCommand({
           TableName: this.tableName,
-          Key: { pk: QUEUE_PK, sk: mine[0].sk },
-          UpdateExpression: "SET #kind = :kind, heartbeat_at = :now, run_url = :run_url, #ttl = :ttl",
-          ExpressionAttributeNames: { "#kind": "kind", "#ttl": "ttl" },
-          ExpressionAttributeValues: { ":kind": kind, ":now": now, ":run_url": settings.runUrl, ":ttl": now + QUEUE_ENTRY_TTL_SECONDS },
+          Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+          UpdateExpression: "SET #ttl = :ttl",
+          ConditionExpression: "entry_sk = :sk",
+          ExpressionAttributeNames: { "#ttl": "ttl" },
+          ExpressionAttributeValues: { ":ttl": this.now() + QUEUE_ENTRY_TTL_SECONDS, ":sk": sk },
         }),
       );
-    } else {
-      const item = {
-        pk: QUEUE_PK,
-        sk: `${String(Math.floor(this.clock() * 1000)).padStart(13, "0")}#${settings.holderKey}`,
-        kind,
-        holder_key: settings.holderKey,
-        repo: settings.repo,
-        actor: settings.actor,
-        ref: settings.ref,
-        run_url: settings.runUrl,
-        enqueued_at: now,
-        heartbeat_at: now,
-        ttl: now + QUEUE_ENTRY_TTL_SECONDS,
-      };
-      if (settings.prUrl) item.pr_url = settings.prUrl;
-      await this.doc.send(new PutCommand({ TableName: this.tableName, Item: item }));
+    } catch (error) {
+      if (isConditionFailure(error)) return false;
+      throw error;
     }
-    // Two runs of one holder can both find no entry and both add one. Keep the earliest and delete the rest: every run
-    // sorts the same way, so they all keep the same entry and the deletes are idempotent.
-    const live = await this.#liveQueue();
-    const duplicates = live.filter((entry) => entry.holder_key === settings.holderKey).slice(1);
-    for (const entry of duplicates) {
-      await this.doc.send(new DeleteCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: entry.sk } }));
-    }
-    // Count holders, not entries, so another holder's duplicate (mid-race) does not push everyone behind it back.
-    const holders = [...new Set(live.map((entry) => entry.holder_key))];
-    return holders.indexOf(settings.holderKey) + 1;
+    return true;
   }
 
-  /** Remove a holder's queue entries of the given kinds. */
+  async #deleteEntry(sk) {
+    await this.doc.send(new DeleteCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk } }));
+  }
+
+  /** Remove a holder's queue entries of the given kinds, and its claim when that named one of them. */
   async removeQueueEntries(holderKey, kinds = ["notify", "poll"]) {
     for (const entry of await this.#queue()) {
-      if (entry.holder_key === holderKey && kinds.includes(entry.kind)) {
-        await this.doc.send(new DeleteCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: entry.sk } }));
+      if (entry.holder_key !== holderKey || !kinds.includes(entry.kind)) continue;
+      await this.#deleteEntry(entry.sk);
+      try {
+        await this.doc.send(
+          new DeleteCommand({
+            TableName: this.tableName,
+            Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+            ConditionExpression: "entry_sk = :sk",
+            ExpressionAttributeValues: { ":sk": entry.sk },
+          }),
+        );
+      } catch (error) {
+        if (!isConditionFailure(error)) throw error; // the claim names another entry (or none): leave it
       }
     }
   }

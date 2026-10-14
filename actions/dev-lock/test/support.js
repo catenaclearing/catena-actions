@@ -140,6 +140,13 @@ export class Context {
     return Items;
   }
 
+  async queueClaim(holderKey) {
+    const { Item } = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk: "QUEUE_CLAIM#dev", sk: holderKey }, ConsistentRead: true }),
+    );
+    return Item ?? null;
+  }
+
   async deleteLock() {
     await this.doc.send(new DeleteCommand({ TableName: this.tableName, Key: { pk: "LOCK#dev", sk: "CURRENT" } }));
   }

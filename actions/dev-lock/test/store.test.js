@@ -111,3 +111,63 @@ describe("queue order", () => {
     assert.equal(position, 2);
   });
 });
+
+describe("LockStore.markPreempted", () => {
+  const url = "https://github.com/catenaclearing/telematics-data-service/actions/runs/1001";
+
+  it("stamps a live hold and says so", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual();
+    const { store } = ctx.make();
+
+    assert.equal(await store.markPreempted("manual#U123", url), true);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.preempted_by, url);
+    assert.equal(lock.preempted_at, START);
+  });
+
+  it("says no, and writes nothing, when the lock has gone", async () => {
+    const ctx = await lab.fresh();
+    const { store } = ctx.make();
+
+    assert.equal(await store.markPreempted("manual#U123", url), false);
+
+    assert.equal(await ctx.currentLock(), null); // a failed condition must not create the item
+  });
+
+  it("says no, and writes nothing, when someone else holds the lock now", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const { store } = ctx.make();
+
+    assert.equal(await store.markPreempted("manual#U123", url), false);
+
+    assert.equal((await ctx.currentLock()).preempted_by, undefined);
+  });
+
+  it("says no when the hold has expired, even though its item is still there", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual({ expiresAt: START - 1 });
+    const { store } = ctx.make();
+
+    assert.equal(await store.markPreempted("manual#U123", url), false);
+
+    assert.equal((await ctx.currentLock()).preempted_by, undefined);
+  });
+
+  it("is still live in the second the hold expires (the same whole-second rule as every other write)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual({ expiresAt: START });
+    const { store } = ctx.make();
+
+    assert.equal(await store.markPreempted("manual#U123", url), true);
+  });
+
+  it("does not hide a real error as a lost race", async () => {
+    const ctx = await lab.fresh();
+    const broken = new LockStore({ send: async () => Promise.reject(Object.assign(new Error("no"), { name: "AccessDeniedException" })) }, ctx.tableName, () => ctx.clock.now());
+
+    await assert.rejects(broken.markPreempted("manual#U123", url), /no/);
+  });
+});

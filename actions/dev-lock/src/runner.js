@@ -38,7 +38,10 @@ async function tookLock(settings, store, out, mode) {
   return 0;
 }
 
-/** Act on a live lock held by someone else. Returns the exit code, or null to keep waiting. */
+/** Returned instead of an exit code when the lock changed under us and should be read again straight away. */
+const LOOK_AGAIN = Symbol("look again");
+
+/** Act on a live lock held by someone else. Returns the exit code, null to keep waiting, or LOOK_AGAIN. */
 async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) {
   const decision = decide(mode, lock.holderType, { isMainPush: settings.isMainPush });
   const holder = `${holderLabel(lock)}, ${timing(lock, clock.now())}`;
@@ -49,7 +52,9 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
   }
 
   if (decision === Decision.PREEMPT) {
-    await store.markPreempted(lock.holderKey, settings.runUrl);
+    // If the hold ended since we read it there is nothing to preempt, and someone else may have taken the lock in the
+    // meantime: going ahead now would deploy alongside them without waiting. Look at the lock again instead.
+    if (!(await store.markPreempted(lock.holderKey, settings.runUrl))) return LOOK_AGAIN;
     await store.removeQueueEntries(settings.holderKey, ["poll"]);
     out.warning(
       `Dev is held by ${holder}. A merge to main must not be stalled by a manual hold (production waits on this deploy), ` +
@@ -94,18 +99,25 @@ export async function acquire(settings, store, clock, out) {
 
   const wait = { since: null };
   let races = 0;
+  const lostRace = () => {
+    races += 1;
+    if (races > MAX_RACE_RETRIES) throw new Error("the dev lock kept changing while trying to take it");
+  };
   for (;;) {
     if (await tryTake(settings, store)) return tookLock(settings, store, out, mode);
 
     const lock = await store.getLock();
     if (lock === null || lock.isExpired(store.now())) {
       // Freed or expired between our write and our read: someone else may be racing us, so just try again.
-      races += 1;
-      if (races > MAX_RACE_RETRIES) throw new Error("the dev lock kept changing while trying to take it");
+      lostRace();
       continue;
     }
 
     const exitCode = await heldBySomeoneElse(settings, store, clock, out, mode, lock, wait);
+    if (exitCode === LOOK_AGAIN) {
+      lostRace();
+      continue;
+    }
     if (exitCode !== null) {
       out.setOutput("acquired", "false");
       out.setOutput("blocked", exitCode ? "true" : "false");
