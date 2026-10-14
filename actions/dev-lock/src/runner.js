@@ -31,10 +31,13 @@ async function tryTake(settings, store) {
 }
 
 async function tookLock(settings, store, out, mode) {
-  await store.removeQueueEntries(settings.holderKey);
   out.setOutput("acquired", "true");
   out.setOutput("blocked", "false");
-  out.notice(`Holding the dev lock for ${settings.holderKey} (mode: ${mode}).`);
+  try {
+    await store.removeQueueEntries(settings.holderKey);
+  } catch {
+    out.warning("dev-lock acquired the lock but could not clear its queue entry; continuing with the lock held.");
+  }
   return 0;
 }
 
