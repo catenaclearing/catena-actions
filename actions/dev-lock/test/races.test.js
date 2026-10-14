@@ -291,6 +291,21 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
     assert.deepEqual(positions, [1, 1]);
   });
 
+  it("a deleted duplicate does not count toward the position: a holder in between stays ahead", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const bob = "ci#catenaclearing/other#bob#refs/pull/9/merge";
+    await ctx.put({ pk: "QUEUE#dev", sk: sk(START - 30), kind: "notify", holder_key: holder(), heartbeat_at: START, ttl: START + 3600 });
+    await ctx.put({ pk: "QUEUE#dev", sk: sk(START - 20, bob), kind: "notify", holder_key: bob, heartbeat_at: START, ttl: START + 3600 });
+    await ctx.put({ pk: "QUEUE#dev", sk: sk(START - 10), kind: "notify", holder_key: holder(), heartbeat_at: START, ttl: START + 3600 });
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: sk(START - 10), ttl: START + 3600 });
+    const { settings, store } = ctx.make();
+
+    assert.equal(await store.enqueue(settings, "notify"), 2); // behind bob, as the queue now reads
+
+    assert.deepEqual((await ctx.queueItems()).map((entry) => entry.holder_key), [bob, holder()]);
+  });
+
   it("a run whose claim was taken over while it wrote removes its own entry and joins the new one", async () => {
     const ctx = await lab.fresh();
     await ctx.holdAsCi();

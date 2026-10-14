@@ -339,8 +339,10 @@ export class LockStore {
         }
       }
       if (claimMoved) continue;
-      // Count holders, not entries, so another holder's leftover (mid-race) does not push everyone behind it back.
-      const holders = [...new Set(live.map((entry) => entry.holder_key))];
+      // Count holders, not entries, so another holder's leftover (mid-race) does not push everyone behind it back. This
+      // holder counts only at its claimed entry: the duplicates just deleted must not move it ahead of anyone.
+      const remaining = live.filter((entry) => entry.holder_key !== settings.holderKey || entry.sk === sk);
+      const holders = [...new Set(remaining.map((entry) => entry.holder_key))];
       return holders.indexOf(settings.holderKey) + 1;
     }
     throw new Error("this deploy's queue entry kept changing while trying to write it");

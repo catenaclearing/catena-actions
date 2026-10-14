@@ -306,6 +306,23 @@ describe("merge to main", () => {
     assert.equal(ctx.out.outputs.blocked, "false");
   });
 
+  it("leaves the queue entirely once it takes a hold over, including an old `notify` entry of the same holder", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    // A blocked workflow_dispatch on main by the same actor left a notify entry: same repo, actor and ref, so same holder.
+    const dispatch = ctx.make(githubEnv({ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/main", GITHUB_RUN_ID: "900" }));
+    assert.equal(await acquire(dispatch.settings, dispatch.store, ctx.clock, ctx.out), 1);
+    assert.equal((await ctx.queueItems()).length, 1);
+
+    const merge = ctx.make(mainPushEnv());
+    assert.equal(merge.settings.holderKey, dispatch.settings.holderKey);
+    assert.equal(await acquire(merge.settings, merge.store, ctx.clock, ctx.out), 0);
+
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(await ctx.queueClaim(merge.settings.holderKey), null);
+  });
+
   it("while it deploys over a manual hold, a PR deploy is blocked even if the hold is unlocked or runs out", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");

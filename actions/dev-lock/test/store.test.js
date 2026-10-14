@@ -97,11 +97,12 @@ describe("queue order", () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
     await ctx.holdAsCi();
-    const mk = (n, actor) => ({ pk: "QUEUE#dev", sk: `${String(START + n).padStart(13, "0")}#ci#r#${actor}#ref`, kind: "notify", holder_key: `ci#r#${actor}#ref`, ttl: START + 9999 });
+    // In milliseconds, as the store writes them; "middle" is at START, which is the entry this run will claim.
+    const mk = (ms, actor) => ({ pk: "QUEUE#dev", sk: `${String(START * 1000 + ms).padStart(13, "0")}#ci#r#${actor}#ref`, kind: "notify", holder_key: `ci#r#${actor}#ref`, ttl: START + 9999 });
     const unsorted = {
       send: async (command) => {
         const response = await ctx.doc.send(command);
-        return command.constructor.name === "QueryCommand" ? { Items: [mk(3, "late"), mk(1, "first"), mk(2, "middle")] } : response;
+        return command.constructor.name === "QueryCommand" ? { Items: [mk(1, "late"), mk(-1, "first"), mk(0, "middle")] } : response;
       },
     };
     const { settings } = ctx.make(githubEnv({ GITHUB_ACTOR: "middle", GITHUB_REF: "ref" }), { repo: "r" });

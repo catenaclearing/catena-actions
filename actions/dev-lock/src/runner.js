@@ -63,9 +63,15 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
     // If the hold ended or changed since we read it there is nothing to preempt, and someone else may have taken the
     // lock in the meantime: look at the lock again instead of deploying alongside them.
     if (!(await store.takeOverHold(settings, lock.holderKey))) return LOOK_AGAIN;
-    await store.removeQueueEntries(settings.holderKey, ["poll"]);
     out.setOutput("acquired", "true");
     out.setOutput("blocked", "false");
+    // It holds dev now, so it leaves the queue entirely, as tookLock does: an old `notify` entry of this holder (say a
+    // blocked workflow_dispatch on main) would otherwise keep counting toward everyone else's position.
+    try {
+      await store.removeQueueEntries(settings.holderKey);
+    } catch {
+      out.warning("dev-lock took the lock over but could not clear its queue entry; continuing with the lock held.");
+    }
     out.warning(
       `Dev is held by ${holder}. A merge to main must not be stalled by a manual hold (production waits on this deploy), ` +
         `so it has taken the lock over until it finishes; ${lock.actor} has been told and gets the hold back afterwards.`,
