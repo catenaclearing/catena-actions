@@ -43,7 +43,7 @@ export class Lock {
 function isLive(entry, now) {
   if (Number(entry.ttl ?? now + 1) <= now) return false;
   // A `notify` entry belongs to a job that already failed and does not poll, so only `poll` entries can go stale.
-  return !(entry.kind === "poll" && now - Number(entry.heartbeat_at ?? now) > POLL_ENTRY_STALE_SECONDS);
+  return !(entry.kind === "poll" && now - Number(entry.heartbeat_at ?? now) > POLL_ENTRY_STALE_SECONDS + Number(entry.poll_seconds ?? 0));
 }
 
 /**
@@ -380,7 +380,13 @@ export class LockStore {
   /** Create or refresh the entry at `sk`. An upsert, so two runs writing the same entry leave one item. */
   async #writeEntry(settings, kind, sk) {
     const now = this.now();
-    const always = { kind, heartbeat_at: now, run_url: settings.runUrl, ttl: now + QUEUE_ENTRY_TTL_SECONDS };
+    const always = {
+      kind,
+      heartbeat_at: now,
+      run_url: settings.runUrl,
+      ttl: now + QUEUE_ENTRY_TTL_SECONDS,
+      ...(kind === "poll" ? { poll_seconds: settings.pollSeconds } : {}),
+    };
     const once = { holder_key: settings.holderKey, repo: settings.repo, actor: settings.actor, ref: settings.ref, enqueued_at: now };
     if (settings.prUrl) once.pr_url = settings.prUrl;
     const names = {};
@@ -389,7 +395,13 @@ export class LockStore {
     Object.entries({ ...always, ...once }).forEach(([field, value], i) => {
       names[`#f${i}`] = field;
       values[`:v${i}`] = value;
-      sets.push(field in always ? `#f${i} = :v${i}` : `#f${i} = if_not_exists(#f${i}, :v${i})`);
+      sets.push(
+        field === "kind" && kind === "poll"
+          ? `#f${i} = if_not_exists(#f${i}, :v${i})`
+          : field in always
+            ? `#f${i} = :v${i}`
+            : `#f${i} = if_not_exists(#f${i}, :v${i})`,
+      );
     });
     await this.doc.send(
       new UpdateCommand({
@@ -460,18 +472,58 @@ export class LockStore {
   async removeQueueEntries(holderKey, kinds = ["notify", "poll"]) {
     for (const entry of await this.#queue()) {
       if (entry.holder_key !== holderKey || !kinds.includes(entry.kind)) continue;
-      await this.#deleteEntry(entry.sk);
-      try {
-        await this.doc.send(
-          new DeleteCommand({
-            TableName: this.tableName,
-            Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
-            ConditionExpression: "entry_sk = :sk",
-            ExpressionAttributeValues: { ":sk": entry.sk },
-          }),
-        );
-      } catch (error) {
-        if (!isConditionFailure(error)) throw error; // the claim names another entry (or none): leave it
+      for (let attempt = 0; attempt <= MAX_QUEUE_RETRIES; attempt += 1) {
+        const kindValues = Object.fromEntries(kinds.map((kind, index) => [`:kind${index}`, kind]));
+        try {
+          await this.doc.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  Delete: {
+                    TableName: this.tableName,
+                    Key: { pk: QUEUE_PK, sk: entry.sk },
+                    ConditionExpression: `holder_key = :holder AND #kind IN (${kinds.map((_, index) => `:kind${index}`).join(", ")})`,
+                    ExpressionAttributeNames: { "#kind": "kind" },
+                    ExpressionAttributeValues: { ":holder": holderKey, ...kindValues },
+                  },
+                },
+                {
+                  Delete: {
+                    TableName: this.tableName,
+                    Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+                    ConditionExpression: "entry_sk = :sk",
+                    ExpressionAttributeValues: { ":sk": entry.sk },
+                  },
+                },
+              ],
+            }),
+          );
+          break;
+        } catch (error) {
+          if (error?.name !== "TransactionCanceledException") throw error;
+          const [{ Item: current }, { Item: claim }] = await Promise.all([
+            this.doc.send(new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: entry.sk }, ConsistentRead: true })),
+            this.doc.send(new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_CLAIM_PK, sk: holderKey }, ConsistentRead: true })),
+          ]);
+          if (!current || current.holder_key !== holderKey || !kinds.includes(current.kind)) break;
+          if (claim?.entry_sk !== entry.sk) {
+            try {
+              await this.doc.send(
+                new DeleteCommand({
+                  TableName: this.tableName,
+                  Key: { pk: QUEUE_PK, sk: entry.sk },
+                  ConditionExpression: `holder_key = :holder AND #kind IN (${kinds.map((_, index) => `:kind${index}`).join(", ")})`,
+                  ExpressionAttributeNames: { "#kind": "kind" },
+                  ExpressionAttributeValues: { ":holder": holderKey, ...kindValues },
+                }),
+              );
+            } catch (deleteError) {
+              if (!isConditionFailure(deleteError)) throw deleteError;
+            }
+            break;
+          }
+          if (attempt === MAX_QUEUE_RETRIES) throw error;
+        }
       }
     }
   }

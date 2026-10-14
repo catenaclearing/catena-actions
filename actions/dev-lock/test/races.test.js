@@ -151,6 +151,49 @@ describe("the queue", () => {
     assert.match(ctx.out.messages.at(-1)[1], /#2/);
   });
 
+  it("a long-poll waiter stays live for its configured interval plus request latency", async () => {
+    const ctx = await lab.fresh();
+    const waiting = ctx.make(githubEnv({ INPUT_POLL_SECONDS: "300" }));
+    await waiting.store.enqueue(waiting.settings, "poll");
+    ctx.clock.current += 200;
+    const next = ctx.make(githubEnv({ GITHUB_ACTOR: "carol" }));
+
+    assert.equal(await next.store.enqueue(next.settings, "notify"), 2);
+  });
+
+  it("a poll refresh does not replace the holder's notify request", async () => {
+    const ctx = await lab.fresh();
+    const { settings, store } = ctx.make();
+    await store.enqueue(settings, "notify");
+
+    await store.enqueue(settings, "poll");
+
+    assert.equal((await ctx.queueItems())[0].kind, "notify");
+  });
+
+  it("poll-only cleanup preserves a notification refreshed after its queue snapshot", async () => {
+    const ctx = await lab.fresh();
+    const { settings, store } = ctx.make();
+    await store.enqueue(settings, "poll");
+    let refreshed = false;
+    const racing = {
+      send: async (command) => {
+        const response = await ctx.doc.send(command);
+        if (!refreshed && command instanceof QueryCommand && command.input.ExpressionAttributeValues[":pk"] === "QUEUE#dev") {
+          refreshed = true;
+          await store.enqueue(settings, "notify");
+        }
+        return response;
+      },
+    };
+
+    await new LockStore(racing, ctx.tableName, () => ctx.clock.now()).removeQueueEntries(settings.holderKey, ["poll"]);
+
+    const [entry] = await ctx.queueItems();
+    assert.equal(entry.kind, "notify");
+    assert.equal((await ctx.queueClaim(settings.holderKey)).entry_sk, entry.sk);
+  });
+
   it("a notify-me entry is not dropped for having no heartbeat (failed deploys do not poll)", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
@@ -269,7 +312,7 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
 
     const mine = (await ctx.queueItems()).filter((entry) => entry.holder_key === holder());
     assert.deepEqual(mine.map((entry) => entry.sk), [sk(START + 5)]);
-    assert.equal(mine[0].kind, "poll"); // refreshed by this run
+    assert.equal(mine[0].kind, "notify"); // polling must not erase notification interest
   });
 
   it("does not delete a sibling's newly claimed entry after confirming a stale claim", async () => {

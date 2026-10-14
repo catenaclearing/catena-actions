@@ -70,14 +70,38 @@ export class Lab {
       send: (command) => {
         const operation = pending.then(async () => {
           if (!(command instanceof TransactWriteCommand)) return doc.send(command);
-          const [{ ConditionCheck }, { Delete }] = command.input.TransactItems;
-          const { Item: claim } = await doc.send(
-            new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
+          const items = command.input.TransactItems;
+          if (items[0].ConditionCheck) {
+            const [{ ConditionCheck }, { Delete }] = items;
+            const { Item: claim } = await doc.send(
+              new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
+            );
+            if (claim?.entry_sk !== ConditionCheck.ExpressionAttributeValues[":sk"]) {
+              throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+            }
+            await doc.send(new DeleteCommand(Delete));
+            return {};
+          }
+          const deletes = items.map(({ Delete }) => Delete);
+          const queueDelete = deletes.find(({ Key }) => Key.pk === "QUEUE#dev");
+          const claimDelete = deletes.find(({ Key }) => Key.pk === "QUEUE_CLAIM#dev");
+          const [{ Item: entry }, { Item: claim }] = await Promise.all(
+            [queueDelete, claimDelete].map((input) =>
+              doc.send(new GetCommand({ TableName: input.TableName, Key: input.Key, ConsistentRead: true })),
+            ),
           );
-          if (claim?.entry_sk !== ConditionCheck.ExpressionAttributeValues[":sk"]) {
+          const allowedKinds = Object.entries(queueDelete.ExpressionAttributeValues)
+            .filter(([name]) => name.startsWith(":kind"))
+            .map(([, kind]) => kind);
+          if (
+            !entry ||
+            entry.holder_key !== queueDelete.ExpressionAttributeValues[":holder"] ||
+            !allowedKinds.includes(entry.kind) ||
+            claim?.entry_sk !== claimDelete.ExpressionAttributeValues[":sk"]
+          ) {
             throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
           }
-          await doc.send(new DeleteCommand(Delete));
+          await Promise.all(deletes.map((input) => doc.send(new DeleteCommand(input))));
           return {};
         });
         pending = operation.catch(() => {});
