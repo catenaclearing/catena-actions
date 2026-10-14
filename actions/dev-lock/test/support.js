@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import dynalite from "dynalite";
 import { CreateTableCommand, DescribeTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { Settings } from "../src/config.js";
 import { Output } from "../src/github.js";
 import { LockStore } from "../src/store.js";
@@ -73,6 +73,27 @@ export class Lab {
           const items = command.input.TransactItems;
           if (items[0].ConditionCheck) {
             const [{ ConditionCheck }, { Delete }] = items;
+            if (ConditionCheck.Key.pk === "QUEUE#dev" && items[1].Update) {
+              const { Item: entry } = await doc.send(
+                new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
+              );
+              const values = ConditionCheck.ExpressionAttributeValues ?? {};
+              const allowed = ConditionCheck.ConditionExpression.includes("attribute_not_exists(pk)")
+                ? !entry
+                : ConditionCheck.ConditionExpression.includes("ttl = :observed")
+                  ? entry?.ttl === values[":observed"] && entry.ttl <= values[":now"]
+                  : entry?.kind === values[":poll"] &&
+                    entry.heartbeat_at === values[":heartbeat"] &&
+                    entry.heartbeat_at < values[":cutoff"] &&
+                    (values[":pollSeconds"] === undefined
+                      ? entry.poll_seconds === undefined
+                      : entry.poll_seconds === values[":pollSeconds"]);
+              if (!allowed) {
+                throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+              }
+              await doc.send(new UpdateCommand(items[1].Update));
+              return {};
+            }
             const { Item: claim } = await doc.send(
               new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
             );

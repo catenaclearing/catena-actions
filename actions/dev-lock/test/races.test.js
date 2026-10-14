@@ -1,7 +1,7 @@
 // The timing-sensitive paths: another run changing the lock between two of our calls.
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { GetCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release, run } from "../src/runner.js";
 import { LockStore } from "../src/store.js";
 import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
@@ -371,7 +371,78 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
 
     assert.equal(await store.enqueue(settings, "notify"), 2);
 
-    assert.equal((await ctx.queueClaim(holder())).entry_sk, sk(START));
+    assert.ok((await ctx.queueClaim(holder())).entry_sk.startsWith(`${String(START * 1000).padStart(13, "0")}#`));
+  });
+
+  it("does not replace a missing-entry claim after a sibling publishes its notification", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const oldSk = sk(START - 60);
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: oldSk, ttl: START + 3600 });
+    const { settings } = ctx.make();
+    let sawMissingEntry = false;
+    const pollingDoc = {
+      send: async (command) => {
+        const response = await ctx.doc.send(command);
+        if (!sawMissingEntry && command instanceof GetCommand && command.input.Key.pk === "QUEUE#dev" && command.input.Key.sk === oldSk) {
+          sawMissingEntry = true;
+          await new LockStore(ctx.doc, ctx.tableName, () => ctx.clock.now()).enqueue(settings, "notify");
+        }
+        return response;
+      },
+    };
+
+    assert.equal(await new LockStore(pollingDoc, ctx.tableName, () => ctx.clock.now()).enqueue(settings, "poll"), 1);
+
+    const claim = await ctx.queueClaim(holder());
+    const entries = (await ctx.queueItems()).filter((entry) => entry.holder_key === holder());
+    assert.equal(sawMissingEntry, true);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].sk, claim.entry_sk);
+    assert.equal(entries[0].kind, "notify");
+  });
+
+  it("keeps a confirmed notification when a slower runner reuses an older timestamp", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const oldSk = sk(START);
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: holder(), entry_sk: oldSk, ttl: START + 3600 });
+    const { settings } = ctx.make();
+    let finishFirstClaim;
+    let firstClaimUpdated;
+    const firstClaimPaused = new Promise((resolve) => {
+      firstClaimUpdated = resolve;
+    });
+    const letFirstContinue = new Promise((resolve) => {
+      finishFirstClaim = resolve;
+    });
+    let paused = false;
+    const firstDoc = {
+      send: async (command) => {
+        const response = await ctx.doc.send(command);
+        if (!paused && command instanceof TransactWriteCommand && command.input.TransactItems[1]?.Update?.Key.pk === "QUEUE_CLAIM#dev") {
+          paused = true;
+          firstClaimUpdated();
+          await letFirstContinue;
+        }
+        return response;
+      },
+    };
+    const first = new LockStore(firstDoc, ctx.tableName, () => START + 1);
+    const slower = new LockStore(ctx.doc, ctx.tableName, () => START);
+
+    const firstEnqueue = first.enqueue(settings, "poll");
+    await firstClaimPaused;
+    await slower.enqueue(settings, "notify");
+    finishFirstClaim();
+    await firstEnqueue;
+
+    const claim = await ctx.queueClaim(holder());
+    const entries = (await ctx.queueItems()).filter((entry) => entry.holder_key === holder());
+    assert.equal(claim.entry_sk === oldSk, false);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].sk, claim.entry_sk);
+    assert.equal(entries[0].kind, "notify");
   });
 
   it("a dead (stale poll) entry is replaced, not revived, and is deleted", async () => {
@@ -383,7 +454,9 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
 
     await store.enqueue(settings, "poll");
 
-    assert.deepEqual((await ctx.queueItems()).map((entry) => entry.sk), [sk(START)]);
+    const entries = await ctx.queueItems();
+    assert.equal(entries.length, 1);
+    assert.ok(entries[0].sk.startsWith(`${String(START * 1000).padStart(13, "0")}#`));
   });
 
   it("leaving the queue removes the claim too, so the next block starts a fresh entry", async () => {

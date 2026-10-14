@@ -87,6 +87,24 @@ describe("the DynamoDB client's timeouts", () => {
     assert.equal(config.throwOnRequestTimeout, true);
   });
 
+  it("uses credentials captured for this action invocation", async () => {
+    const doc = createDocumentClient(
+      { region: "us-east-2" },
+      {
+        AWS_ACCESS_KEY_ID: "captured-access-key",
+        AWS_SECRET_ACCESS_KEY: "captured-secret-key",
+        AWS_SESSION_TOKEN: "captured-session-token",
+      },
+    );
+
+    const { accessKeyId, secretAccessKey, sessionToken } = await doc.config.credentials();
+    assert.deepEqual({ accessKeyId, secretAccessKey, sessionToken }, {
+      accessKeyId: "captured-access-key",
+      secretAccessKey: "captured-secret-key",
+      sessionToken: "captured-session-token",
+    });
+  });
+
   it("the handler options always ask the SDK to throw on a request timeout, with the documented limits", () => {
     assert.deepEqual(requestHandlerOptions(), { connectionTimeout: 5000, requestTimeout: 10000, throwOnRequestTimeout: true });
     assert.deepEqual({ ...LIMITS }, { connectionTimeout: 5000, requestTimeout: 10000, maxAttempts: 3 });

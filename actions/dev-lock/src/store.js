@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 export const LOCK_KEY = Object.freeze({ pk: "LOCK#dev", sk: "CURRENT" });
@@ -353,30 +354,85 @@ export class LockStore {
     const now = this.now();
     const claimKey = { pk: QUEUE_CLAIM_PK, sk: settings.holderKey };
     const { Item: claim } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: claimKey, ConsistentRead: true }));
+    let entry;
     if (claim) {
-      const { Item: entry } = await this.doc.send(
+      ({ Item: entry } = await this.doc.send(
         new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: claim.entry_sk }, ConsistentRead: true }),
-      );
+      ));
       if (entry && isLive(entry, now)) return claim.entry_sk;
     }
     // A missing or dead entry is not kept: the holder goes to the back of the queue, as a new arrival.
-    const sk = `${String(Math.floor(this.clock() * 1000)).padStart(13, "0")}#${settings.holderKey}`;
+    const sk = `${String(Math.floor(this.clock() * 1000)).padStart(13, "0")}#${randomUUID()}#${settings.holderKey}`;
     try {
-      await this.doc.send(
-        new PutCommand({
-          TableName: this.tableName,
-          Item: { ...claimKey, entry_sk: sk, ttl: now + QUEUE_ENTRY_TTL_SECONDS },
-          ...(claim
-            ? { ConditionExpression: "entry_sk = :old", ExpressionAttributeValues: { ":old": claim.entry_sk } }
-            : { ConditionExpression: "attribute_not_exists(pk)" }),
-        }),
-      );
+      if (claim) {
+        const condition = this.#staleEntryCondition(entry, now);
+        await this.doc.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                ConditionCheck: {
+                  TableName: this.tableName,
+                  Key: { pk: QUEUE_PK, sk: claim.entry_sk },
+                  ...condition,
+                },
+              },
+              {
+                Update: {
+                  TableName: this.tableName,
+                  Key: claimKey,
+                  UpdateExpression: "SET entry_sk = :next, #ttl = :ttl",
+                  ConditionExpression: "entry_sk = :old",
+                  ExpressionAttributeNames: { "#ttl": "ttl" },
+                  ExpressionAttributeValues: {
+                    ":old": claim.entry_sk,
+                    ":next": sk,
+                    ":ttl": now + QUEUE_ENTRY_TTL_SECONDS,
+                  },
+                },
+              },
+            ],
+          }),
+        );
+      } else {
+        await this.doc.send(
+          new PutCommand({
+            TableName: this.tableName,
+            Item: { ...claimKey, entry_sk: sk, ttl: now + QUEUE_ENTRY_TTL_SECONDS },
+            ConditionExpression: "attribute_not_exists(pk)",
+          }),
+        );
+      }
     } catch (error) {
-      if (isConditionFailure(error)) return null;
+      if (isConditionFailure(error) || error?.name === "TransactionCanceledException") return null;
       throw error;
     }
     if (claim && claim.entry_sk !== sk) await this.#deleteEntry(claim.entry_sk);
     return sk;
+  }
+
+  #staleEntryCondition(entry, now) {
+    if (!entry) return { ConditionExpression: "attribute_not_exists(pk)" };
+    if (Number(entry.ttl ?? now + 1) <= now) {
+      return {
+        ConditionExpression: "ttl = :observed AND ttl <= :now",
+        ExpressionAttributeValues: { ":observed": entry.ttl, ":now": now },
+      };
+    }
+    const heartbeat = Number(entry.heartbeat_at ?? now);
+    const pollSeconds = Number(entry.poll_seconds ?? 0);
+    const cutoff = now - POLL_ENTRY_STALE_SECONDS - pollSeconds;
+    return {
+      ConditionExpression:
+        "#kind = :poll AND heartbeat_at = :heartbeat AND heartbeat_at < :cutoff AND " +
+        (entry.poll_seconds === undefined ? "attribute_not_exists(poll_seconds)" : "poll_seconds = :pollSeconds"),
+      ExpressionAttributeNames: { "#kind": "kind" },
+      ExpressionAttributeValues: {
+        ":poll": "poll",
+        ":heartbeat": heartbeat,
+        ":cutoff": cutoff,
+        ...(entry.poll_seconds === undefined ? {} : { ":pollSeconds": entry.poll_seconds }),
+      },
+    };
   }
 
   /** Create or refresh the entry at `sk`. An upsert, so two runs writing the same entry leave one item. */

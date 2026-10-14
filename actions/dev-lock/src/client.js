@@ -20,10 +20,19 @@ export function requestHandlerOptions({ connectionTimeout, requestTimeout } = LI
  * `limits` is only here so tests can use short timeouts; the action always uses the defaults.
  */
 export function createDocumentClient(settings, env = process.env, limits = LIMITS) {
+  const credentials =
+    env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY
+      ? {
+          accessKeyId: env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+          ...(env.AWS_SESSION_TOKEN ? { sessionToken: env.AWS_SESSION_TOKEN } : {}),
+        }
+      : undefined;
   const client = new DynamoDBClient({
     region: settings.region,
     maxAttempts: limits.maxAttempts,
     requestHandler: new NodeHttpHandler(requestHandlerOptions(limits)),
+    ...(credentials ? { credentials } : {}),
     ...(env.AWS_ENDPOINT_URL ? { endpoint: env.AWS_ENDPOINT_URL } : {}),
   });
   return DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });

@@ -4,6 +4,11 @@ import { Output } from "./github.js";
 import { Decision, Mode, decide, parseMode } from "./policy.js";
 
 const MAX_RACE_RETRIES = 5;
+const AWS_STATE = Object.freeze({
+  AWS_ACCESS_KEY_ID: "aws_access_key_id",
+  AWS_SECRET_ACCESS_KEY: "aws_secret_access_key",
+  AWS_SESSION_TOKEN: "aws_session_token",
+});
 
 /** The real clock. Time is in epoch seconds, so tests can substitute one that only moves when the code sleeps. */
 export const systemClock = {
@@ -162,6 +167,14 @@ export async function release(settings, store, out) {
   return 0;
 }
 
+function saveAcquisitionState(settings, env, out) {
+  out.saveState("table_name", settings.tableName);
+  out.saveState("region", settings.region);
+  for (const [variable, stateName] of Object.entries(AWS_STATE)) {
+    if (env[variable] !== undefined) out.saveState(stateName, env[variable]);
+  }
+}
+
 /**
  * Run `acquire` or `release`. Fails open: only a deliberate block (1) or a wiring bug (2) is a non-zero exit.
  *
@@ -175,8 +188,24 @@ export async function run(command, { env = process.env, makeStore = createStore,
   }
 
   try {
-    const settings = Settings.fromEnv(env);
-    const store = makeStore(settings, env, clock);
+    const settings = Settings.fromEnv(
+      env,
+      command === "release"
+        ? {
+            ...(env.STATE_table_name !== undefined ? { tableName: env.STATE_table_name } : {}),
+            ...(env.STATE_region !== undefined ? { region: env.STATE_region } : {}),
+          }
+        : {},
+    );
+    const clientEnv = { ...env };
+    if (command === "release") {
+      for (const [variable, stateName] of Object.entries(AWS_STATE)) {
+        if (env[`STATE_${stateName}`] !== undefined) clientEnv[variable] = env[`STATE_${stateName}`];
+      }
+    } else {
+      saveAcquisitionState(settings, env, output);
+    }
+    const store = makeStore(settings, clientEnv, clock);
     return command === "acquire" ? await acquire(settings, store, clock, output) : await release(settings, store, output);
   } catch (error) {
     // Fail open by design: the lock is coordination, not a security control.

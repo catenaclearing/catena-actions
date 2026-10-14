@@ -106,6 +106,9 @@ describe("queue order", () => {
       },
     };
     const { settings } = ctx.make(githubEnv({ GITHUB_ACTOR: "middle", GITHUB_REF: "ref" }), { repo: "r" });
+    const mine = mk(0, "middle");
+    await ctx.put(mine);
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: settings.holderKey, entry_sk: mine.sk, ttl: START + 3600 });
     const store = new LockStore(unsorted, ctx.tableName, () => ctx.clock.now());
 
     const position = await store.enqueue(settings, "notify");

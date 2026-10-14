@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { acquire, release } from "../src/runner.js";
+import { acquire, release, run } from "../src/runner.js";
+import { Output } from "../src/github.js";
 import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
 const lab = new Lab();
@@ -79,6 +83,74 @@ describe("release", () => {
     await release(settings, store, ctx.out);
 
     assert.equal(await ctx.currentLock(), null);
+  });
+
+  it("releases each repeated action invocation with its saved credentials and resolved table and region", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    const dir = mkdtempSync(join(tmpdir(), "dev-lock-state-"));
+    const states = [join(dir, "lock-1"), join(dir, "lock-2")];
+    const calls = [];
+    const makeStore = (settings, env) => {
+      calls.push({ settings, env });
+      return ctx.make(githubEnv(), {}, ctx.doc).store;
+    };
+    const invocationEnv = (id, accessKey, region) =>
+      githubEnv({
+        GITHUB_RUN_ID: id,
+        INPUT_TABLE_NAME: ctx.tableName,
+        INPUT_AWS_REGION: region,
+        AWS_ACCESS_KEY_ID: accessKey,
+        AWS_SECRET_ACCESS_KEY: `${accessKey}-secret`,
+        AWS_SESSION_TOKEN: `${accessKey}-session`,
+      });
+    const acquireInvocation = async (index, env) =>
+      run("acquire", {
+        env,
+        clock: ctx.clock,
+        out: new Output({ echo: false, stateFile: states[index] }),
+        makeStore,
+      });
+    const postEnv = (index, env) => ({
+      ...env,
+      ...Object.fromEntries(
+        readFileSync(states[index], "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [`STATE_${line.slice(0, separator)}`, line.slice(separator + 1)];
+          }),
+      ),
+    });
+    try {
+      const firstEnv = invocationEnv("1001", "first-access", "us-west-1");
+      const secondEnv = invocationEnv("1002", "second-access", "eu-west-1");
+
+      assert.equal(await acquireInvocation(0, firstEnv), 0);
+      assert.equal(await acquireInvocation(1, secondEnv), 0);
+
+      assert.equal(await run("release", { env: postEnv(1, secondEnv), clock: ctx.clock, out: ctx.out, makeStore }), 0);
+      const afterSecond = await ctx.currentLock();
+      assert.deepEqual([...afterSecond.run_ids], [calls[0].settings.runToken]);
+
+      const cleanedEnv = { ...firstEnv };
+      delete cleanedEnv.AWS_ACCESS_KEY_ID;
+      delete cleanedEnv.AWS_SECRET_ACCESS_KEY;
+      delete cleanedEnv.AWS_SESSION_TOKEN;
+      const envBeforeFirstPost = { ...cleanedEnv };
+      assert.equal(await run("release", { env: postEnv(0, cleanedEnv), clock: ctx.clock, out: ctx.out, makeStore }), 0);
+
+      assert.equal(envBeforeFirstPost.AWS_ACCESS_KEY_ID, undefined);
+      assert.equal(calls[3].env.AWS_ACCESS_KEY_ID, "first-access");
+      assert.equal(calls[3].env.AWS_SECRET_ACCESS_KEY, "first-access-secret");
+      assert.equal(calls[3].env.AWS_SESSION_TOKEN, "first-access-session");
+      assert.equal(calls[3].settings.tableName, ctx.tableName);
+      assert.equal(calls[3].settings.region, "us-west-1");
+      assert.equal(await ctx.currentLock(), null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("removes a waiting entry but keeps the notify-me entry (a blocked PR deploy must still be pinged)", async () => {
