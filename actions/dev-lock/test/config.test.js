@@ -20,9 +20,19 @@ describe("Settings", () => {
 
   it("a re-run attempt and a different job change the token", () => {
     const base = Settings.fromEnv(githubEnv());
-    assert.equal(base.runToken, "1001-1-deploy-development");
+    assert.match(base.runToken, /^1001-1-deploy-development-[0-9a-f]{8}$/);
     assert.notEqual(Settings.fromEnv(githubEnv({ GITHUB_RUN_ATTEMPT: "2" })).runToken, base.runToken);
     assert.notEqual(Settings.fromEnv(githubEnv({ GITHUB_JOB: "other-job" })).runToken, base.runToken);
+  });
+
+  it("two legs of a matrix job (same run, attempt and job name) get different tokens", () => {
+    assert.notEqual(Settings.fromEnv(githubEnv()).runToken, Settings.fromEnv(githubEnv()).runToken);
+  });
+
+  it("the post step uses the token its main step saved as action state", () => {
+    const main = Settings.fromEnv(githubEnv());
+    const post = Settings.fromEnv(githubEnv({ STATE_run_token: main.runToken }));
+    assert.equal(post.runToken, main.runToken);
   });
 
   it("a different actor or ref is a different holder", () => {

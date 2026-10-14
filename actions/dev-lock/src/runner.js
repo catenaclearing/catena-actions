@@ -1,4 +1,4 @@
-import { Settings } from "./config.js";
+import { RUN_TOKEN_STATE, Settings } from "./config.js";
 import { createStore } from "./client.js";
 import { Output } from "./github.js";
 import { Decision, Mode, decide, parseMode } from "./policy.js";
@@ -99,6 +99,8 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
 
 /** Take the dev lock for this run. Returns 1 only when the deploy must stop; every other outcome is 0. */
 export async function acquire(settings, store, clock, out) {
+  // Saved before anything is written, so the post step can release this share even if acquire dies after taking it.
+  out.saveState(RUN_TOKEN_STATE, settings.runToken);
   const mode = parseMode(await store.getMode());
   if (mode === Mode.OFF) {
     out.notice("dev-lock is off (table CONFIG/mode); deploying without the lock.");
@@ -119,6 +121,12 @@ export async function acquire(settings, store, clock, out) {
     const lock = await store.getLock();
     if (lock === null || lock.isExpired(store.now())) {
       // Freed or expired between our write and our read: someone else may be racing us, so just try again.
+      lostRace();
+      continue;
+    }
+    if (lock.holderKey === settings.holderKey) {
+      // Our own holder took the lock after our join failed (a sibling run got in when the previous holder released).
+      // It is ours to join, not someone else's to wait on or be blocked by.
       lostRace();
       continue;
     }
@@ -153,7 +161,7 @@ export async function release(settings, store, out) {
  * `makeStore` is injectable so tests can point it at a local DynamoDB.
  */
 export async function run(command, { env = process.env, makeStore = createStore, clock = systemClock, out = null } = {}) {
-  const output = out ?? new Output({ outputFile: env.GITHUB_OUTPUT ?? null });
+  const output = out ?? new Output({ outputFile: env.GITHUB_OUTPUT ?? null, stateFile: env.GITHUB_STATE ?? null });
   if (command !== "acquire" && command !== "release") {
     output.error(`dev-lock: unknown command '${command ?? ""}' (expected 'acquire' or 'release'); this is a bug in the action wiring.`);
     return 2;

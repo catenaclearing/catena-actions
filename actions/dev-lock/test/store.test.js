@@ -204,3 +204,42 @@ describe("LockStore.takeOverHold", () => {
     await assert.rejects(broken.takeOverHold(settings, "manual#U123"), /no/);
   });
 });
+
+describe("LockStore.joinIfMine", () => {
+  it("never shortens the lease: a sibling with a longer TTL keeps its expiry", async () => {
+    const ctx = await lab.fresh();
+    const long = ctx.make(githubEnv({ GITHUB_JOB: "long", INPUT_TTL_MINUTES: "120" }));
+    const short = ctx.make(githubEnv({ GITHUB_JOB: "short", INPUT_TTL_MINUTES: "10" }));
+    await long.store.putIfFree(long.settings);
+
+    assert.equal(await short.store.joinIfMine(short.settings), true);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.expires_at, START + 120 * 60);
+    assert.equal(lock.run_ids.size, 2);
+  });
+
+  it("pushes the expiry out when this run's TTL reaches further", async () => {
+    const ctx = await lab.fresh();
+    const first = ctx.make(githubEnv({ GITHUB_JOB: "a", INPUT_TTL_MINUTES: "10" }));
+    const later = ctx.make(githubEnv({ GITHUB_JOB: "b", INPUT_TTL_MINUTES: "10" }));
+    await first.store.putIfFree(first.settings);
+    ctx.clock.current = START + 300;
+
+    await later.store.joinIfMine(later.settings);
+
+    assert.equal((await ctx.currentLock()).expires_at, START + 300 + 600);
+  });
+
+  it("does not join someone else's lock, or an expired one of its own", async () => {
+    const ctx = await lab.fresh();
+    const { settings, store } = ctx.make();
+    await ctx.holdAsCi();
+    assert.equal(await store.joinIfMine(settings), false);
+
+    await ctx.deleteLock();
+    await store.putIfFree(settings);
+    ctx.clock.current = START + settings.ttlSeconds + 1;
+    assert.equal(await ctx.make(githubEnv({ GITHUB_JOB: "x" })).store.joinIfMine(ctx.make(githubEnv({ GITHUB_JOB: "x" })).settings), false);
+  });
+});

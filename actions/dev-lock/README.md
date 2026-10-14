@@ -40,13 +40,20 @@ A merge to main is never stalled by a manual hold because production deploys wai
 lock over. The lock item becomes an ordinary CI lease held by that run (its sibling runs join it, every other deploy
 waits or is blocked behind it), the hold is kept in `preempted_hold`, and `preempted_by` / `preempted_at` are set so
 the Slack bot can tell the holder. When the last run of that merge releases, the hold is put back if it has not run
-out, still carrying `preempted_by`; otherwise the lock is freed. The takeover is conditional on exactly the hold that
-was read (same holder, `started_at` and `expires_at`, still live): if it ended or changed in between (`/dev unlock`,
+out, still carrying `preempted_by`; otherwise the lock is freed. That last write is conditional on `preempted_hold`
+being unchanged since it was read, so an unlock or extend from the Slack bot in between is never undone. The
+takeover is conditional on exactly the hold that was read (same holder, `started_at` and `expires_at`, still live): if it ended or changed in between (`/dev unlock`,
 `/dev extend`, it expired) the run reads the lock again, which takes the lock, takes the new hold over, or, if a CI
 deploy got there first, waits behind it like any other merge to main.
 
 For the Slack bot: while a hold is taken over, the lock item is `holder_type = ci`. `/dev unlock` from that holder
 should remove `preempted_hold` (so it is not put back), not delete the lock, which belongs to the deploy.
+
+A holder is `repo + actor + ref`, so every run of one PR or merge shares the lock; it frees when the last of them
+releases. Each call of this action gets its own share (a token in `run_ids`): run id, attempt and job name plus a
+random part, saved as action state so its post step releases exactly that share. Run id, attempt and job name alone
+are the same for every leg of a matrix job, which would let the first leg to finish free the lock under the others.
+A run that finds its own holder already has the lock joins it, never waits on it or is blocked by it.
 
 A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
 Slack bot can ping that person when dev is free. Acquisition is first come, first served through a
@@ -62,7 +69,7 @@ stale `poll`) is not revived: the holder gets a new entry at the back of the que
 |---|---|---|
 | `table_name` | `catena-dev-lock` | |
 | `aws_region` | `AWS_REGION` / `AWS_DEFAULT_REGION`, then `us-east-1` | |
-| `ttl_minutes` | `60` | How long a lock lasts if its job dies without releasing it. Refreshed on every call within a job. At least 1 |
+| `ttl_minutes` | `60` | How long a lock lasts if its job dies without releasing it. Each call pushes the expiry out to at least this, never shortens it. At least 1 |
 | `wait_minutes` | `30` | How long a merge to main waits for a CI deploy. At least 0 (0 gives up straight away) |
 | `poll_seconds` | `15` | At least 1 |
 

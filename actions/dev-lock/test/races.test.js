@@ -476,3 +476,29 @@ describe("a manual hold that ends while a merge to main is preempting it", () =>
     await assert.rejects(acquire(settings, store, ctx.clock, ctx.out), /kept changing/);
   });
 });
+
+describe("our own holder takes the lock between our failed join and our read", () => {
+  it("joins it instead of being blocked by itself", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi();
+    const sibling = ctx.make(githubEnv({ GITHUB_JOB: "deploy-development-2" }));
+    let swapped = false;
+    const doc = {
+      send: async (command) => {
+        if (!swapped && command instanceof GetCommand && command.input.Key.pk === "LOCK#dev") {
+          swapped = true;
+          await ctx.deleteLock(); // bob's deploy finishes
+          assert.equal(await sibling.store.putIfFree(sibling.settings), true); // and our sibling run gets in first
+        }
+        return ctx.doc.send(command);
+      },
+    };
+    const { settings, store } = ctx.make(githubEnv(), {}, doc);
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.equal(ctx.out.outputs.acquired, "true");
+    assert.deepEqual(new Set((await ctx.currentLock()).run_ids), new Set([sibling.settings.runToken, settings.runToken]));
+  });
+});

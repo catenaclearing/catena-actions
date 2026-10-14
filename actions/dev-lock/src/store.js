@@ -8,6 +8,7 @@ export const QUEUE_ENTRY_TTL_SECONDS = 4 * 60 * 60; // garbage collection only; 
 export const POLL_ENTRY_STALE_SECONDS = 120; // a polling job refreshes its entry every few seconds; older means its runner died
 
 const MAX_QUEUE_RETRIES = 5;
+const MAX_FINISH_RETRIES = 5;
 
 const isConditionFailure = (error) => error?.name === "ConditionalCheckFailedException";
 
@@ -111,27 +112,41 @@ export class LockStore {
     return true;
   }
 
-  /** Add this run to a lock its own holder already has (and push the expiry out). */
+  /**
+   * Add this run to a lock its own holder already has, and push the expiry out to at least this run's TTL.
+   *
+   * Two writes, so that joining never shortens the lease: a sibling with a longer TTL (or one that refreshed later)
+   * keeps its expiry. A single `SET expires_at` would overwrite it with whatever this run computed.
+   */
   async joinIfMine(settings) {
     const now = this.now();
+    const expires = now + settings.ttlSeconds;
     try {
       await this.doc.send(
         new UpdateCommand({
           TableName: this.tableName,
           Key: LOCK_KEY,
-          UpdateExpression: "ADD run_ids :run SET expires_at = :expires",
+          UpdateExpression: "ADD run_ids :run",
           ConditionExpression: "holder_key = :me AND expires_at >= :now",
-          ExpressionAttributeValues: {
-            ":run": new Set([settings.runToken]),
-            ":expires": now + settings.ttlSeconds,
-            ":me": settings.holderKey,
-            ":now": now,
-          },
+          ExpressionAttributeValues: { ":run": new Set([settings.runToken]), ":me": settings.holderKey, ":now": now },
         }),
       );
     } catch (error) {
       if (isConditionFailure(error)) return false;
       throw error;
+    }
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: LOCK_KEY,
+          UpdateExpression: "SET expires_at = :expires",
+          ConditionExpression: "holder_key = :me AND expires_at < :expires",
+          ExpressionAttributeValues: { ":expires": expires, ":me": settings.holderKey },
+        }),
+      );
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error; // already lasts at least that long
     }
     return true;
   }
@@ -161,34 +176,57 @@ export class LockStore {
     const heldByThisRun = runsBefore.has(settings.runToken);
     const otherRuns = [...runsBefore].filter((token) => token !== settings.runToken);
     if (otherRuns.length > 0) return heldByThisRun;
-    // If a sibling run of this holder joined in between, run_ids is back and the lock correctly stays.
-    const stillMineAndEmpty = "holder_key = :me AND (attribute_not_exists(run_ids) OR size(run_ids) = :zero)";
-    const hold = response.Attributes?.preempted_hold;
-    try {
-      if (hold && Number(hold.expires_at) >= this.now()) {
-        // This lease preempted a manual hold that has not run out: give it back, so the holder still has dev.
-        await this.doc.send(
-          new PutCommand({
-            TableName: this.tableName,
-            Item: { ...hold, ...LOCK_KEY, preempted_by: response.Attributes.preempted_by, preempted_at: response.Attributes.preempted_at },
-            ConditionExpression: stillMineAndEmpty,
-            ExpressionAttributeValues: { ":me": settings.holderKey, ":zero": 0 },
-          }),
-        );
-      } else {
-        await this.doc.send(
-          new DeleteCommand({
-            TableName: this.tableName,
-            Key: LOCK_KEY,
-            ConditionExpression: stillMineAndEmpty,
-            ExpressionAttributeValues: { ":me": settings.holderKey, ":zero": 0 },
-          }),
-        );
-      }
-    } catch (error) {
-      if (!isConditionFailure(error)) throw error;
-    }
+    await this.#finishRelease(settings.holderKey);
     return heldByThisRun;
+  }
+
+  /**
+   * The holder has no runs left: give back the manual hold it preempted (if that hold is still wanted and live), or free
+   * the lock.
+   *
+   * Every write is conditional on the item being what was just read: still this holder's, still empty, and with the same
+   * `preempted_hold` (holder, start and expiry) or still none. So a `/dev unlock` or `/dev extend` that lands in between (the Slack
+   * bot removes or edits `preempted_hold`) is never undone: the write fails and the item is read again. A sibling run
+   * that joined in between makes run_ids non-empty again, and the lock correctly stays.
+   */
+  async #finishRelease(holderKey) {
+    for (let attempt = 0; attempt <= MAX_FINISH_RETRIES; attempt += 1) {
+      const { Item: item } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: LOCK_KEY, ConsistentRead: true }));
+      if (!item || item.holder_key !== holderKey || (item.run_ids && item.run_ids.size > 0)) return;
+      const hold = item.preempted_hold;
+      // The hold is matched on its identifying fields, not as a whole map: equality on maps is not something to rely on.
+      const unchanged =
+        "holder_key = :me AND (attribute_not_exists(run_ids) OR size(run_ids) = :zero) AND " +
+        (hold
+          ? "preempted_hold.holder_key = :hk AND preempted_hold.started_at = :hs AND preempted_hold.expires_at = :he"
+          : "attribute_not_exists(preempted_hold)");
+      const values = {
+        ":me": holderKey,
+        ":zero": 0,
+        ...(hold ? { ":hk": hold.holder_key, ":hs": hold.started_at, ":he": hold.expires_at } : {}),
+      };
+      try {
+        if (hold && Number(hold.expires_at) >= this.now()) {
+          // This lease preempted a manual hold that has not run out: give it back, so the holder still has dev.
+          await this.doc.send(
+            new PutCommand({
+              TableName: this.tableName,
+              Item: { ...hold, ...LOCK_KEY, preempted_by: item.preempted_by, preempted_at: item.preempted_at },
+              ConditionExpression: unchanged,
+              ExpressionAttributeValues: values,
+            }),
+          );
+        } else {
+          await this.doc.send(
+            new DeleteCommand({ TableName: this.tableName, Key: LOCK_KEY, ConditionExpression: unchanged, ExpressionAttributeValues: values }),
+          );
+        }
+        return;
+      } catch (error) {
+        if (!isConditionFailure(error)) throw error;
+      }
+    }
+    // Still changing under us: leave it. The lease expires on its own, and nobody is let in early.
   }
 
   /**

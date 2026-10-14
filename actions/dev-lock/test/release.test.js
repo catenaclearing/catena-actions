@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release } from "../src/runner.js";
 import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
@@ -221,5 +222,108 @@ describe("releasing a lease that preempted a manual hold", () => {
 
     await release(sibling.settings, sibling.store, ctx.out);
     assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
+  });
+});
+
+describe("matrix jobs: every leg has the same run id, attempt and job name", () => {
+  it("the first leg to finish does not free the lock while another leg is still deploying", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    const legs = [ctx.make(), ctx.make()];
+    for (const { settings, store } of legs) assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    await release(legs[0].settings, legs[0].store, ctx.out);
+
+    const lock = await ctx.currentLock();
+    assert.deepEqual([...lock.run_ids], [legs[1].settings.runToken]);
+
+    await release(legs[1].settings, legs[1].store, ctx.out);
+    assert.equal(await ctx.currentLock(), null);
+  });
+
+  it("acquire saves its token as action state, and a post step given that state releases exactly that share", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    const { settings, store } = ctx.make();
+    await acquire(settings, store, ctx.clock, ctx.out);
+
+    assert.equal(ctx.out.state.run_token, settings.runToken);
+    const post = ctx.make(githubEnv({ STATE_run_token: ctx.out.state.run_token }));
+    await release(post.settings, post.store, ctx.out);
+    assert.equal(await ctx.currentLock(), null);
+  });
+});
+
+describe("the Slack bot changing a taken-over hold while the lease is being released", () => {
+  /** A client that runs `change` once, right after release reads the lock to decide whether to give the hold back. */
+  function changeAfterDecidingRead(doc, change) {
+    let releasing = false;
+    let fired = false;
+    return {
+      send: async (command) => {
+        const response = await doc.send(command);
+        if (command instanceof UpdateCommand && command.input.UpdateExpression === "DELETE run_ids :run") releasing = true;
+        else if (releasing && !fired && command instanceof GetCommand && command.input.Key.pk === "LOCK#dev") {
+          fired = true;
+          await change();
+        }
+        return response;
+      },
+    };
+  }
+
+  async function takenOver(ctx) {
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    const merge = ctx.make(mainPushEnv());
+    await acquire(merge.settings, merge.store, ctx.clock, ctx.out);
+    return merge.settings;
+  }
+
+  it("`/dev unlock` in between (preempted_hold removed) is not undone: the lock is freed, not the hold put back", async () => {
+    const ctx = await lab.fresh();
+    const settings = await takenOver(ctx);
+    const doc = changeAfterDecidingRead(ctx.doc, () =>
+      ctx.doc.send(new UpdateCommand({ TableName: ctx.tableName, Key: { pk: "LOCK#dev", sk: "CURRENT" }, UpdateExpression: "REMOVE preempted_hold" })),
+    );
+    const { store } = ctx.make(githubEnv(), {}, doc);
+
+    await release(settings, store, ctx.out);
+
+    assert.equal(await ctx.currentLock(), null);
+  });
+
+  it("`/dev extend` in between gives back the extended hold, not the one read before it", async () => {
+    const ctx = await lab.fresh();
+    const settings = await takenOver(ctx);
+    const doc = changeAfterDecidingRead(ctx.doc, () =>
+      ctx.doc.send(
+        new UpdateCommand({
+          TableName: ctx.tableName,
+          Key: { pk: "LOCK#dev", sk: "CURRENT" },
+          UpdateExpression: "SET preempted_hold.expires_at = :e",
+          ExpressionAttributeValues: { ":e": START + 9000 },
+        }),
+      ),
+    );
+    const { store } = ctx.make(githubEnv(), {}, doc);
+
+    await release(settings, store, ctx.out);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_key, "manual#U123");
+    assert.equal(lock.expires_at, START + 9000);
+  });
+
+  it("a sibling joining in between keeps the lease", async () => {
+    const ctx = await lab.fresh();
+    const settings = await takenOver(ctx);
+    const sibling = ctx.make(mainPushEnv({ GITHUB_JOB: "deploy-development-2" }));
+    const doc = changeAfterDecidingRead(ctx.doc, () => sibling.store.joinIfMine(sibling.settings));
+    const { store } = ctx.make(githubEnv(), {}, doc);
+
+    await release(settings, store, ctx.out);
+
+    assert.deepEqual([...(await ctx.currentLock()).run_ids], [sibling.settings.runToken]);
   });
 });
