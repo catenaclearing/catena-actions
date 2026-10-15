@@ -52,9 +52,32 @@ export function mainPushEnv(overrides = {}) {
   return githubEnv({ GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", ...overrides });
 }
 
-/** One in-memory DynamoDB for a test file; `fresh()` gives each test its own table, clock and output. */
+/**
+ * A DynamoDB that runs transactions for real (DynamoDB Local), when one is given. CI always sets it (see
+ * status-checks.yaml); locally: `docker run -d -p 8000:8000 amazon/dynamodb-local:3.1.0` and
+ * `DEV_LOCK_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 npm test`.
+ */
+export const REAL_DYNAMODB = process.env.DEV_LOCK_DYNAMODB_ENDPOINT || null;
+
+/**
+ * One DynamoDB for a test file; `fresh()` gives each test its own table, clock and output.
+ *
+ * Against DynamoDB Local every command, transactions included, is sent unchanged. dynalite has no TransactWriteItems,
+ * so without it transactions go through the stand-in below, which can only check what it was written to check.
+ */
 export class Lab {
   async start() {
+    if (REAL_DYNAMODB) {
+      this.endpoint = REAL_DYNAMODB;
+      this.raw = new DynamoDBClient({
+        endpoint: this.endpoint,
+        region: "us-east-1",
+        credentials: { accessKeyId: "test", secretAccessKey: "test" },
+        maxAttempts: 1,
+      });
+      this.doc = DynamoDBDocumentClient.from(this.raw);
+      return;
+    }
     this.server = dynalite({ createTableMs: 0, deleteTableMs: 0 });
     await new Promise((resolve) => this.server.listen(0, "127.0.0.1", resolve));
     this.endpoint = `http://127.0.0.1:${this.server.address().port}`;
@@ -80,7 +103,7 @@ export class Lab {
               const values = ConditionCheck.ExpressionAttributeValues ?? {};
               const allowed = ConditionCheck.ConditionExpression.includes("attribute_not_exists(pk)")
                 ? !entry
-                : ConditionCheck.ConditionExpression.includes("ttl = :observed")
+                : ConditionCheck.ConditionExpression.includes("#ttl = :observed")
                   ? entry?.ttl === values[":observed"] && entry.ttl <= values[":now"]
                   : entry?.kind === values[":poll"] &&
                     entry.heartbeat_at === values[":heartbeat"] &&
@@ -133,7 +156,7 @@ export class Lab {
 
   async stop() {
     this.raw.destroy();
-    await new Promise((resolve) => this.server.close(resolve));
+    if (this.server) await new Promise((resolve) => this.server.close(resolve));
   }
 
   async fresh() {

@@ -414,7 +414,8 @@ export class LockStore {
     if (!entry) return { ConditionExpression: "attribute_not_exists(pk)" };
     if (Number(entry.ttl ?? now + 1) <= now) {
       return {
-        ConditionExpression: "ttl = :observed AND ttl <= :now",
+        ConditionExpression: "#ttl = :observed AND #ttl <= :now", // `ttl` is a DynamoDB reserved word
+        ExpressionAttributeNames: { "#ttl": "ttl" },
         ExpressionAttributeValues: { ":observed": entry.ttl, ":now": now },
       };
     }

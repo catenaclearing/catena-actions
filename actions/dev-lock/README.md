@@ -129,6 +129,10 @@ This action has its own Node project; the repo's Python tooling does not run it.
 cd actions/dev-lock
 npm ci
 npm test            # runs against an in-memory DynamoDB (dynalite), no AWS needed
+
+# The same suite with real transactions, as CI runs it (dynalite has no TransactWriteItems):
+docker run -d -p 8000:8000 amazon/dynamodb-local:3.1.0
+DEV_LOCK_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 npm test
 npm run build       # rebuilds dist/
 ```
 
@@ -137,7 +141,11 @@ the result. A test fails, and so does CI, if the committed `dist/` is not exactl
 repo's `.gitignore` ignores `dist/` in general and has an exception for this one.
 
 Tests run on [dynalite](https://github.com/architect/dynalite), so conditional writes, set operations, reserved
-words and consistent reads behave like DynamoDB. `test/dist.test.js` runs the real bundles as separate `node`
+words and consistent reads behave like DynamoDB. dynalite has no transactions, so `test/support.js` stands in for
+them there, and that stand-in only checks what it was written to check. CI therefore runs the whole suite against
+DynamoDB Local instead (`DEV_LOCK_DYNAMODB_ENDPOINT`), where every transaction is sent unchanged, and
+`test/transactions.test.js` checks the real commits and rollbacks; it is skipped locally without that endpoint and
+fails in CI without it. `test/dist.test.js` runs the real bundles as separate `node`
 processes from an unrelated directory, the way the runner does.
 
 Dependencies are pinned exactly in `package.json` and `package-lock.json`. Bump the AWS SDK packages together.
