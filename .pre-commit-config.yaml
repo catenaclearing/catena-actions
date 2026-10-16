@@ -4,10 +4,12 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-toml
+      # actions/dev-lock/dist is the esbuild output GitHub runs, and must stay exactly what `npm run build` writes
+      # (test/dist.test.js checks it); the bundled AWS SDK has trailing whitespace these hooks would strip.
       - id: end-of-file-fixer
-        exclude: '.*\.(ambr)$'
+        exclude: '(.*\.(ambr)$|^actions/dev-lock/dist/)'
       - id: trailing-whitespace
-        exclude: '.*\.(ambr)$'
+        exclude: '(.*\.(ambr)$|^actions/dev-lock/dist/)'
       - id: check-yaml
       - id: check-json
       - id: detect-private-key

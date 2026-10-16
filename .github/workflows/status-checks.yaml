@@ -52,6 +52,16 @@ jobs:
     defaults:
       run:
         working-directory: actions/dev-lock
+    # dynalite (the default test backend) has no TransactWriteItems, so CI runs the whole suite against DynamoDB Local,
+    # where the store's transactions are sent unchanged and really commit or roll back. test/transactions.test.js fails
+    # in CI if this endpoint is missing.
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:3.1.0 # its default command is `-jar DynamoDBLocal.jar -inMemory`
+        ports:
+          - 8000:8000
+    env:
+      DEV_LOCK_DYNAMODB_ENDPOINT: http://127.0.0.1:8000
     steps:
       - uses: actions/checkout@v7
 
@@ -64,6 +74,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Wait for DynamoDB Local
+        run: |
+          for attempt in $(seq 1 30); do
+            curl -s -o /dev/null "$DEV_LOCK_DYNAMODB_ENDPOINT" && exit 0
+            sleep 2
+          done
+          echo "DynamoDB Local did not start" >&2
+          exit 1
 
       # Includes a check that the committed dist/ is what `npm run build` produces: a JavaScript action runs from its bundle.
       - name: Test

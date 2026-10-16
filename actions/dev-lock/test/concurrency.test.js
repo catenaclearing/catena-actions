@@ -15,7 +15,7 @@ it("only one of many simultaneous deploys takes the lock", async () => {
   const results = await Promise.all(
     Array.from({ length: contenders }, async (_, index) => {
       const { settings, store } = ctx.make(githubEnv({ GITHUB_ACTOR: `user${index}` }));
-      const out = { outputs: {}, messages: [], notice() {}, warning() {}, error() {}, debug() {}, setOutput(name, value) { this.outputs[name] = value; } };
+      const out = { outputs: {}, messages: [], notice() {}, warning() {}, error() {}, debug() {}, saveState() {}, setOutput(name, value) { this.outputs[name] = value; } };
       const code = await acquire(settings, store, ctx.clock, out);
       return { actor: `user${index}`, code, acquired: out.outputs.acquired };
     }),

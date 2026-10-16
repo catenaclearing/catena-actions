@@ -19,10 +19,11 @@ after(() => lab.stop());
 function runBundle(file, env) {
   const cwd = mkdtempSync(join(tmpdir(), "dev-lock-cwd-"));
   const outputFile = join(cwd, "github_output");
+  const stateFile = join(cwd, "github_state");
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [dist(file)], {
       cwd,
-      env: { PATH: process.env.PATH, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test", ...env, GITHUB_OUTPUT: outputFile },
+      env: { PATH: process.env.PATH, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test", ...env, GITHUB_OUTPUT: outputFile, GITHUB_STATE: stateFile },
     });
     let stdout = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -34,7 +35,17 @@ function runBundle(file, env) {
       } catch {
         /* the action wrote no outputs */
       }
-      resolve({ code, stdout, outputs });
+      // What GitHub hands this action's post step: each saved `name=value` as STATE_<name>.
+      const state = {};
+      try {
+        for (const line of readFileSync(stateFile, "utf8").split("\n").filter(Boolean)) {
+          const at = line.indexOf("=");
+          state[`STATE_${line.slice(0, at)}`] = line.slice(at + 1);
+        }
+      } catch {
+        /* the action saved no state */
+      }
+      resolve({ code, stdout, outputs, state });
     });
   });
 }
@@ -52,9 +63,23 @@ describe("dist/main.cjs and dist/post.cjs", () => {
     assert.equal(main.outputs, "acquired=true\nblocked=false\n");
     assert.equal((await ctx.currentLock()).actor, "alice");
 
-    const post = await runBundle("post.cjs", forTable(ctx));
+    const post = await runBundle("post.cjs", forTable(ctx, main.state));
     assert.equal(post.code, 0);
     assert.match(post.stdout, /::notice::Released the dev lock/);
+    assert.equal(await ctx.currentLock(), null);
+  });
+
+  it("two matrix legs' bundles each release only their own share", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    const legs = [await runBundle("main.cjs", forTable(ctx)), await runBundle("main.cjs", forTable(ctx))];
+    assert.deepEqual(legs.map((leg) => leg.code), [0, 0]);
+    assert.notEqual(legs[0].state.STATE_run_token, legs[1].state.STATE_run_token);
+
+    await runBundle("post.cjs", forTable(ctx, legs[0].state));
+    assert.deepEqual([...(await ctx.currentLock()).run_ids], [legs[1].state.STATE_run_token]);
+
+    await runBundle("post.cjs", forTable(ctx, legs[1].state));
     assert.equal(await ctx.currentLock(), null);
   });
 

@@ -6,9 +6,11 @@ function escapeMessage(message) {
 
 /** GitHub workflow commands (annotations) and step outputs, recorded so tests can read them back. */
 export class Output {
-  constructor({ echo = true, outputFile = null, stream = process.stdout } = {}) {
+  constructor({ echo = true, outputFile = null, stateFile = null, stream = process.stdout } = {}) {
     this.echo = echo;
     this.outputFile = outputFile;
+    this.stateFile = stateFile;
+    this.state = {};
     this.stream = stream;
     this.messages = [];
     this.outputs = {};
@@ -43,5 +45,11 @@ export class Output {
   setOutput(name, value) {
     this.outputs[name] = value;
     if (this.outputFile) appendFileSync(this.outputFile, `${name}=${value}\n`, "utf8");
+  }
+
+  /** Save action state, which GitHub hands to this action's post step as `STATE_<name>`. */
+  saveState(name, value) {
+    this.state[name] = value;
+    if (this.stateFile) appendFileSync(this.stateFile, `${name}=${value}\n`, "utf8");
   }
 }

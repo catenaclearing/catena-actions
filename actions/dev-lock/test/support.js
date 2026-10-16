@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import dynalite from "dynalite";
 import { CreateTableCommand, DescribeTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { Settings } from "../src/config.js";
 import { Output } from "../src/github.js";
 import { LockStore } from "../src/store.js";
@@ -52,9 +52,32 @@ export function mainPushEnv(overrides = {}) {
   return githubEnv({ GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", ...overrides });
 }
 
-/** One in-memory DynamoDB for a test file; `fresh()` gives each test its own table, clock and output. */
+/**
+ * A DynamoDB that runs transactions for real (DynamoDB Local), when one is given. CI always sets it (see
+ * status-checks.yaml); locally: `docker run -d -p 8000:8000 amazon/dynamodb-local:3.1.0` and
+ * `DEV_LOCK_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 npm test`.
+ */
+export const REAL_DYNAMODB = process.env.DEV_LOCK_DYNAMODB_ENDPOINT || null;
+
+/**
+ * One DynamoDB for a test file; `fresh()` gives each test its own table, clock and output.
+ *
+ * Against DynamoDB Local every command, transactions included, is sent unchanged. dynalite has no TransactWriteItems,
+ * so without it transactions go through the stand-in below, which can only check what it was written to check.
+ */
 export class Lab {
   async start() {
+    if (REAL_DYNAMODB) {
+      this.endpoint = REAL_DYNAMODB;
+      this.raw = new DynamoDBClient({
+        endpoint: this.endpoint,
+        region: "us-east-1",
+        credentials: { accessKeyId: "test", secretAccessKey: "test" },
+        maxAttempts: 1,
+      });
+      this.doc = DynamoDBDocumentClient.from(this.raw);
+      return;
+    }
     this.server = dynalite({ createTableMs: 0, deleteTableMs: 0 });
     await new Promise((resolve) => this.server.listen(0, "127.0.0.1", resolve));
     this.endpoint = `http://127.0.0.1:${this.server.address().port}`;
@@ -64,12 +87,76 @@ export class Lab {
       credentials: { accessKeyId: "test", secretAccessKey: "test" },
       maxAttempts: 1,
     });
-    this.doc = DynamoDBDocumentClient.from(this.raw);
+    const doc = DynamoDBDocumentClient.from(this.raw);
+    let pending = Promise.resolve();
+    this.doc = {
+      send: (command) => {
+        const operation = pending.then(async () => {
+          if (!(command instanceof TransactWriteCommand)) return doc.send(command);
+          const items = command.input.TransactItems;
+          if (items[0].ConditionCheck) {
+            const [{ ConditionCheck }, { Delete }] = items;
+            if (ConditionCheck.Key.pk === "QUEUE#dev" && items[1].Update) {
+              const { Item: entry } = await doc.send(
+                new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
+              );
+              const values = ConditionCheck.ExpressionAttributeValues ?? {};
+              const allowed = ConditionCheck.ConditionExpression.includes("attribute_not_exists(pk)")
+                ? !entry
+                : ConditionCheck.ConditionExpression.includes("#ttl = :observed")
+                  ? entry?.ttl === values[":observed"] && entry.ttl <= values[":now"]
+                  : entry?.kind === values[":poll"] &&
+                    entry.heartbeat_at === values[":heartbeat"] &&
+                    entry.heartbeat_at < values[":cutoff"] &&
+                    (values[":pollSeconds"] === undefined
+                      ? entry.poll_seconds === undefined
+                      : entry.poll_seconds === values[":pollSeconds"]);
+              if (!allowed) {
+                throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+              }
+              await doc.send(new UpdateCommand(items[1].Update));
+              return {};
+            }
+            const { Item: claim } = await doc.send(
+              new GetCommand({ TableName: ConditionCheck.TableName, Key: ConditionCheck.Key, ConsistentRead: true }),
+            );
+            if (claim?.entry_sk !== ConditionCheck.ExpressionAttributeValues[":sk"]) {
+              throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+            }
+            await doc.send(new DeleteCommand(Delete));
+            return {};
+          }
+          const deletes = items.map(({ Delete }) => Delete);
+          const queueDelete = deletes.find(({ Key }) => Key.pk === "QUEUE#dev");
+          const claimDelete = deletes.find(({ Key }) => Key.pk === "QUEUE_CLAIM#dev");
+          const [{ Item: entry }, { Item: claim }] = await Promise.all(
+            [queueDelete, claimDelete].map((input) =>
+              doc.send(new GetCommand({ TableName: input.TableName, Key: input.Key, ConsistentRead: true })),
+            ),
+          );
+          const allowedKinds = Object.entries(queueDelete.ExpressionAttributeValues)
+            .filter(([name]) => name.startsWith(":kind"))
+            .map(([, kind]) => kind);
+          if (
+            !entry ||
+            entry.holder_key !== queueDelete.ExpressionAttributeValues[":holder"] ||
+            !allowedKinds.includes(entry.kind) ||
+            claim?.entry_sk !== claimDelete.ExpressionAttributeValues[":sk"]
+          ) {
+            throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+          }
+          await Promise.all(deletes.map((input) => doc.send(new DeleteCommand(input))));
+          return {};
+        });
+        pending = operation.catch(() => {});
+        return operation;
+      },
+    };
   }
 
   async stop() {
     this.raw.destroy();
-    await new Promise((resolve) => this.server.close(resolve));
+    if (this.server) await new Promise((resolve) => this.server.close(resolve));
   }
 
   async fresh() {
@@ -138,6 +225,13 @@ export class Context {
       }),
     );
     return Items;
+  }
+
+  async queueClaim(holderKey) {
+    const { Item } = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk: "QUEUE_CLAIM#dev", sk: holderKey }, ConsistentRead: true }),
+    );
+    return Item ?? null;
   }
 
   async deleteLock() {

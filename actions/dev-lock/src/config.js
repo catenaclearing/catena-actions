@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 export const DEFAULTS = Object.freeze({
@@ -42,6 +43,20 @@ function pullRequestUrl(env) {
   }
 }
 
+/** The action state name the run token is saved under, for the post step. */
+export const RUN_TOKEN_STATE = "run_token";
+
+/**
+ * One call of this action's share of a holder; a holder keeps the lock until its last share is released.
+ *
+ * Run id, attempt and job name alone are not unique: every leg of a matrix job has the same three, as does a job that
+ * calls the action twice. A shared token would let the first of them to finish release the lock out from under the
+ * others, so each call adds a random part. The readable prefix is only there for people looking at the table.
+ */
+export function newRunToken(env) {
+  return `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT ?? "1"}-${env.GITHUB_JOB ?? ""}-${randomUUID().slice(0, 8)}`;
+}
+
 /** Everything the action needs, read from the GitHub environment and the action inputs. */
 export class Settings {
   constructor(fields) {
@@ -66,6 +81,8 @@ export class Settings {
       eventName: env.GITHUB_EVENT_NAME ?? "",
       serverUrl: env.GITHUB_SERVER_URL ?? "https://github.com",
       prUrl: pullRequestUrl(env),
+      // The post step gets the token its own main step made (saved as action state), so it releases exactly that share.
+      runToken: env[`STATE_${RUN_TOKEN_STATE}`] || newRunToken(env),
       ...overrides,
     });
   }
@@ -73,11 +90,6 @@ export class Settings {
   /** Who holds the lock: every run started by one repo + actor + ref shares one holder. */
   get holderKey() {
     return `ci#${this.repo}#${this.actor}#${this.ref}`;
-  }
-
-  /** One workflow run's share of a holder. A holder keeps the lock until its last run releases. */
-  get runToken() {
-    return `${this.runId}-${this.runAttempt}-${this.job}`;
   }
 
   /** A merge to main. Its dev deploy gates the production deploy, so it is treated differently. */

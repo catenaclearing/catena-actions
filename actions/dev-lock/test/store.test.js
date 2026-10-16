@@ -1,9 +1,10 @@
 // Properties of the store that an emulator cannot show on its own, so these look at how it talks to DynamoDB.
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release } from "../src/runner.js";
 import { Lock, LockStore } from "../src/store.js";
-import { Lab, START, githubEnv } from "./support.js";
+import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
 const lab = new Lab();
 before(() => lab.start());
@@ -96,18 +97,181 @@ describe("queue order", () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
     await ctx.holdAsCi();
-    const mk = (n, actor) => ({ pk: "QUEUE#dev", sk: `${String(START + n).padStart(13, "0")}#ci#r#${actor}#ref`, kind: "notify", holder_key: `ci#r#${actor}#ref`, ttl: START + 9999 });
+    // In milliseconds, as the store writes them; "middle" is at START, which is the entry this run will claim.
+    const mk = (ms, actor) => ({ pk: "QUEUE#dev", sk: `${String(START * 1000 + ms).padStart(13, "0")}#ci#r#${actor}#ref`, kind: "notify", holder_key: `ci#r#${actor}#ref`, ttl: START + 9999 });
     const unsorted = {
       send: async (command) => {
         const response = await ctx.doc.send(command);
-        return command.constructor.name === "QueryCommand" ? { Items: [mk(3, "late"), mk(1, "first"), mk(2, "middle")] } : response;
+        return command.constructor.name === "QueryCommand" ? { Items: [mk(1, "late"), mk(-1, "first"), mk(0, "middle")] } : response;
       },
     };
     const { settings } = ctx.make(githubEnv({ GITHUB_ACTOR: "middle", GITHUB_REF: "ref" }), { repo: "r" });
+    const mine = mk(0, "middle");
+    await ctx.put(mine);
+    await ctx.put({ pk: "QUEUE_CLAIM#dev", sk: settings.holderKey, entry_sk: mine.sk, ttl: START + 3600 });
     const store = new LockStore(unsorted, ctx.tableName, () => ctx.clock.now());
 
     const position = await store.enqueue(settings, "notify");
 
     assert.equal(position, 2);
+  });
+});
+
+describe("LockStore.takeOverHold", () => {
+  const take = (ctx) => {
+    const { settings, store } = ctx.make(mainPushEnv());
+    return { settings, taken: () => store.takeOverHold(settings, "manual#U123") };
+  };
+
+  it("turns a live hold into a lease held by this run, and keeps the hold", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual();
+    const { settings, taken } = take(ctx);
+
+    assert.equal(await taken(), true);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_key, settings.holderKey);
+    assert.equal(lock.expires_at, START + settings.ttlSeconds);
+    assert.equal(lock.preempted_by, settings.runUrl);
+    assert.equal(lock.preempted_at, START);
+    assert.deepEqual(lock.preempted_hold, {
+      holder_type: "manual",
+      holder_key: "manual#U123",
+      actor: "U123",
+      reason: "testing the new connector",
+      started_at: START - 60,
+      expires_at: START + 7200,
+    });
+  });
+
+  it("says no, and writes nothing, when the lock has gone", async () => {
+    const ctx = await lab.fresh();
+
+    assert.equal(await take(ctx).taken(), false);
+
+    assert.equal(await ctx.currentLock(), null); // a failed condition must not create the item
+  });
+
+  it("says no, and writes nothing, when someone else holds the lock now", async () => {
+    const ctx = await lab.fresh();
+    const bob = await ctx.holdAsCi();
+
+    assert.equal(await take(ctx).taken(), false);
+
+    assert.equal((await ctx.currentLock()).holder_key, bob);
+  });
+
+  it("says no when the hold has expired, even though its item is still there", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual({ expiresAt: START - 1 });
+
+    assert.equal(await take(ctx).taken(), false);
+
+    assert.equal((await ctx.currentLock()).holder_type, "manual");
+  });
+
+  it("is still live in the second the hold expires (the same whole-second rule as every other write)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual({ expiresAt: START });
+
+    assert.equal(await take(ctx).taken(), true);
+  });
+
+  it("says no when the hold changed between its read and its write", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsManual();
+    const { settings } = ctx.make(mainPushEnv());
+    let changed = false;
+    const doc = {
+      send: async (command) => {
+        const response = await ctx.doc.send(command);
+        if (!changed && command instanceof GetCommand) {
+          changed = true;
+          await ctx.holdAsManual({ expiresAt: START + 9000 }); // `/dev extend`
+        }
+        return response;
+      },
+    };
+    const store = new LockStore(doc, ctx.tableName, () => ctx.clock.now());
+
+    assert.equal(await store.takeOverHold(settings, "manual#U123"), false);
+
+    assert.equal((await ctx.currentLock()).holder_type, "manual");
+  });
+
+  it("does not hide a real error as a lost race", async () => {
+    const ctx = await lab.fresh();
+    const { settings } = ctx.make(mainPushEnv());
+    const broken = new LockStore({ send: async () => Promise.reject(Object.assign(new Error("no"), { name: "AccessDeniedException" })) }, ctx.tableName, () => ctx.clock.now());
+
+    await assert.rejects(broken.takeOverHold(settings, "manual#U123"), /no/);
+  });
+});
+
+describe("LockStore.joinIfMine", () => {
+  it("never shortens the lease: a sibling with a longer TTL keeps its expiry", async () => {
+    const ctx = await lab.fresh();
+    const long = ctx.make(githubEnv({ GITHUB_JOB: "long", INPUT_TTL_MINUTES: "120" }));
+    const short = ctx.make(githubEnv({ GITHUB_JOB: "short", INPUT_TTL_MINUTES: "10" }));
+    await long.store.putIfFree(long.settings);
+
+    assert.equal(await short.store.joinIfMine(short.settings), true);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.expires_at, START + 120 * 60);
+    assert.equal(lock.run_ids.size, 2);
+  });
+
+  it("pushes the expiry out when this run's TTL reaches further", async () => {
+    const ctx = await lab.fresh();
+    const first = ctx.make(githubEnv({ GITHUB_JOB: "a", INPUT_TTL_MINUTES: "10" }));
+    const later = ctx.make(githubEnv({ GITHUB_JOB: "b", INPUT_TTL_MINUTES: "10" }));
+    await first.store.putIfFree(first.settings);
+    ctx.clock.current = START + 300;
+
+    await later.store.joinIfMine(later.settings);
+
+    assert.equal((await ctx.currentLock()).expires_at, START + 300 + 600);
+  });
+
+  it("does not join a replacement lock after the extension condition fails", async () => {
+    const ctx = await lab.fresh();
+    const first = ctx.make(githubEnv({ INPUT_TTL_MINUTES: "60" }));
+    const joining = ctx.make(githubEnv({ GITHUB_JOB: "sibling", INPUT_TTL_MINUTES: "60" }));
+    await first.store.putIfFree(first.settings);
+    let replaced = false;
+    const racing = {
+      send: async (command) => {
+        try {
+          return await ctx.doc.send(command);
+        } catch (error) {
+          if (!replaced && command.constructor.name === "UpdateCommand" && error.name === "ConditionalCheckFailedException") {
+            replaced = true;
+            await ctx.holdAsCi();
+          }
+          throw error;
+        }
+      },
+    };
+    const store = new LockStore(racing, ctx.tableName, () => ctx.clock.now());
+
+    assert.equal(await store.joinIfMine(joining.settings), false);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.run_ids.has(joining.settings.runToken), false);
+    assert.equal(lock.holder_key, "ci#catenaclearing/catena-platform#bob#refs/pull/7/merge");
+  });
+
+  it("does not join someone else's lock, or an expired one of its own", async () => {
+    const ctx = await lab.fresh();
+    const { settings, store } = ctx.make();
+    await ctx.holdAsCi();
+    assert.equal(await store.joinIfMine(settings), false);
+
+    await ctx.deleteLock();
+    await store.putIfFree(settings);
+    ctx.clock.current = START + settings.ttlSeconds + 1;
+    assert.equal(await ctx.make(githubEnv({ GITHUB_JOB: "x" })).store.joinIfMine(ctx.make(githubEnv({ GITHUB_JOB: "x" })).settings), false);
   });
 });
