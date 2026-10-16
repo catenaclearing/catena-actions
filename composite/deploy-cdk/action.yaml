@@ -130,7 +130,9 @@ runs:
       id: dev-lock
       if: steps.dev-lock-gate.outputs.is_dev_lock == 'true'
       continue-on-error: true
-      uses: catenaclearing/catena-actions/actions/dev-lock@38b4e6d5234dc9064d8014170b5aba84e392c7c1
+      # Pinned to the release that contains this action (v0.16.0), so job setup never waits on the v0 tag moving. Bump it
+      # to a later release commit on main when the action changes; never to a branch commit, which can disappear.
+      uses: catenaclearing/catena-actions/actions/dev-lock@6aec297a1f3e38103322acbf973c355d8a80bc09
       with:
         aws_region: ${{ inputs.aws_region }}
 
