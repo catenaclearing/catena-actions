@@ -34,7 +34,9 @@ inputs:
 
 outputs:
   acquired:
-    description: "'true' when this run holds the lock (including a merge to main that took a manual hold over), otherwise 'false' (report-only, off, blocked, or fail-open)"
+    description: >-
+      'true' when this run holds the lock (including a merge to main that took a manual hold over),
+      otherwise 'false' (report-only, off, blocked, or fail-open)
 
   blocked:
     description: >-
