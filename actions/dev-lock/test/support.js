@@ -94,6 +94,25 @@ export class Lab {
         const operation = pending.then(async () => {
           if (!(command instanceof TransactWriteCommand)) return doc.send(command);
           const items = command.input.TransactItems;
+          if (items[0].Update) {
+            const { Update } = items[0];
+            const { Item: entry } = await doc.send(
+              new GetCommand({ TableName: Update.TableName, Key: Update.Key, ConsistentRead: true }),
+            );
+            const values = Update.ExpressionAttributeValues;
+            const runIds = entry?.poll_run_ids;
+            const allowed =
+              entry?.holder_key === values[":holder"] &&
+              entry.kind === values[":poll"] &&
+              runIds instanceof Set &&
+              runIds.has(values[":token"]) &&
+              runIds.size > values[":one"];
+            if (!allowed) {
+              throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });
+            }
+            await doc.send(new UpdateCommand(Update));
+            return {};
+          }
           if (items[0].ConditionCheck) {
             const [{ ConditionCheck }, { Delete }] = items;
             if (ConditionCheck.Key.pk === "QUEUE#dev" && items[1].Update) {
@@ -137,10 +156,16 @@ export class Lab {
           const allowedKinds = Object.entries(queueDelete.ExpressionAttributeValues)
             .filter(([name]) => name.startsWith(":kind"))
             .map(([, kind]) => kind);
+          const sharedPoll = queueDelete.ConditionExpression.includes("contains(poll_run_ids, :token)");
           if (
             !entry ||
             entry.holder_key !== queueDelete.ExpressionAttributeValues[":holder"] ||
-            !allowedKinds.includes(entry.kind) ||
+            (sharedPoll
+              ? entry.kind !== queueDelete.ExpressionAttributeValues[":poll"] ||
+                !(entry.poll_run_ids instanceof Set) ||
+                !entry.poll_run_ids.has(queueDelete.ExpressionAttributeValues[":token"]) ||
+                entry.poll_run_ids.size !== queueDelete.ExpressionAttributeValues[":one"]
+              : !allowedKinds.includes(entry.kind)) ||
             claim?.entry_sk !== claimDelete.ExpressionAttributeValues[":sk"]
           ) {
             throw Object.assign(new Error("transaction condition failed"), { name: "TransactionCanceledException" });

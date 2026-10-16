@@ -165,6 +165,7 @@ describe("release", () => {
       sk: `${String(START + 1).padStart(13, "0")}#${settings.holderKey}`,
       kind: "poll",
       holder_key: settings.holderKey,
+      poll_run_ids: new Set([settings.runToken]),
       ttl: START + 999,
     });
 

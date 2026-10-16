@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release, run } from "../src/runner.js";
 import { LockStore } from "../src/store.js";
-import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
+import { FakeClock, Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
 const lab = new Lab();
 before(() => lab.start());
@@ -207,6 +207,72 @@ describe("the queue", () => {
     await acquire(second.settings, second.store, ctx.clock, ctx.out);
 
     assert.match(ctx.out.messages.at(-1)[1], /#2/);
+  });
+});
+
+describe("shared polling entries", () => {
+  it("a sibling timeout removes only its share while another waiter is still live", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const long = ctx.make(mainPushEnv({
+      GITHUB_RUN_ID: "1001",
+      INPUT_WAIT_MINUTES: "2",
+      INPUT_POLL_SECONDS: "60",
+    }));
+    const short = ctx.make(mainPushEnv({
+      GITHUB_RUN_ID: "1002",
+      INPUT_WAIT_MINUTES: "1",
+      INPUT_POLL_SECONDS: "60",
+    }));
+    const longClock = new FakeClock();
+    let wakeLong;
+    let signalLongSleeping;
+    const enteredSleep = new Promise((resolve) => {
+      signalLongSleeping = resolve;
+    });
+    longClock.sleep = async (seconds) => {
+      signalLongSleeping();
+      await new Promise((resolve) => {
+        wakeLong = resolve;
+      });
+      longClock.current += seconds;
+    };
+    const longStore = new LockStore(ctx.doc, ctx.tableName, () => longClock.now());
+    const shortStore = new LockStore(ctx.doc, ctx.tableName, () => ctx.clock.now());
+    const longRun = acquire(long.settings, longStore, longClock, ctx.out);
+    await enteredSleep;
+
+    assert.equal(await acquire(short.settings, shortStore, ctx.clock, ctx.out), 1);
+
+    const [entry] = await ctx.queueItems();
+    assert.deepEqual(entry.poll_run_ids, new Set([long.settings.runToken]));
+    assert.equal((await ctx.queueClaim(long.settings.holderKey)).entry_sk, entry.sk);
+
+    longClock.current = START + long.settings.waitSeconds;
+    wakeLong();
+    assert.equal(await longRun, 1);
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(await ctx.queueClaim(long.settings.holderKey), null);
+  });
+
+  it("a cancelled sibling's post step leaves the other waiter's queue share intact", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const first = ctx.make(mainPushEnv({ GITHUB_RUN_ID: "1001" }));
+    const second = ctx.make(mainPushEnv({ GITHUB_RUN_ID: "1002" }));
+    await first.store.enqueue(first.settings, "poll");
+    await second.store.enqueue(second.settings, "poll");
+
+    await release(first.settings, first.store, ctx.out);
+
+    const [entry] = await ctx.queueItems();
+    assert.deepEqual(entry.poll_run_ids, new Set([second.settings.runToken]));
+    assert.equal((await ctx.queueClaim(second.settings.holderKey)).entry_sk, entry.sk);
+
+    await release(second.settings, second.store, ctx.out);
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(await ctx.queueClaim(second.settings.holderKey), null);
   });
 });
 

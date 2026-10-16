@@ -528,9 +528,9 @@ export class LockStore {
       new UpdateCommand({
         TableName: this.tableName,
         Key: { pk: QUEUE_PK, sk },
-        UpdateExpression: `SET ${sets.join(", ")}`,
+        UpdateExpression: `SET ${sets.join(", ")}${kind === "poll" ? " ADD poll_run_ids :run" : ""}`,
         ExpressionAttributeNames: names,
-        ExpressionAttributeValues: values,
+        ExpressionAttributeValues: { ...values, ...(kind === "poll" ? { ":run": new Set([settings.runToken]) } : {}) },
       }),
     );
   }
@@ -589,10 +589,90 @@ export class LockStore {
     return true;
   }
 
+  /** Remove a waiting run's share, and the shared entry only when it was the last waiter. */
+  async #removePollShare(holderKey, entry, runToken) {
+    const key = { pk: QUEUE_PK, sk: entry.sk };
+    for (let attempt = 0; attempt <= MAX_QUEUE_RETRIES; attempt += 1) {
+      const { Item: current } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: key, ConsistentRead: true }));
+      if (!current || current.holder_key !== holderKey || current.kind !== "poll") return;
+      const runIds = current.poll_run_ids;
+      if (!(runIds instanceof Set) || !runIds.has(runToken)) return;
+
+      const values = { ":holder": holderKey, ":poll": "poll", ":one": 1 };
+      const condition =
+        "holder_key = :holder AND #kind = :poll AND contains(poll_run_ids, :token) AND size(poll_run_ids) = :one";
+      const expressionValues = { ...values, ":token": runToken };
+      if (runIds.size > 1) {
+        try {
+          await this.doc.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  Update: {
+                    TableName: this.tableName,
+                    Key: key,
+                    UpdateExpression: "DELETE poll_run_ids :run",
+                    ConditionExpression: condition.replace(" = :one", " > :one"),
+                    ExpressionAttributeNames: { "#kind": "kind" },
+                    ExpressionAttributeValues: { ...expressionValues, ":run": new Set([runToken]) },
+                  },
+                },
+              ],
+            }),
+          );
+          return;
+        } catch (error) {
+          if (error?.name !== "TransactionCanceledException") throw error;
+          continue;
+        }
+      }
+
+      const claimKey = { pk: QUEUE_CLAIM_PK, sk: holderKey };
+      const { Item: claim } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: claimKey, ConsistentRead: true }));
+      const queueDelete = {
+        TableName: this.tableName,
+        Key: key,
+        ConditionExpression: condition,
+        ExpressionAttributeNames: { "#kind": "kind" },
+        ExpressionAttributeValues: expressionValues,
+      };
+      try {
+        if (claim?.entry_sk === entry.sk) {
+          await this.doc.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                { Delete: queueDelete },
+                {
+                  Delete: {
+                    TableName: this.tableName,
+                    Key: claimKey,
+                    ConditionExpression: "entry_sk = :sk",
+                    ExpressionAttributeValues: { ":sk": entry.sk },
+                  },
+                },
+              ],
+            }),
+          );
+        } else {
+          await this.doc.send(new DeleteCommand(queueDelete));
+        }
+        return;
+      } catch (error) {
+        if (isConditionFailure(error) || error?.name === "TransactionCanceledException") continue;
+        throw error;
+      }
+    }
+    throw new Error("this deploy's poll queue share kept changing while trying to remove it");
+  }
+
   /** Remove a holder's queue entries of the given kinds, and its claim when that named one of them. */
-  async removeQueueEntries(holderKey, kinds = ["notify", "poll"]) {
+  async removeQueueEntries(holderKey, kinds = ["notify", "poll"], runToken = null) {
     for (const entry of await this.#queue()) {
       if (entry.holder_key !== holderKey || !kinds.includes(entry.kind)) continue;
+      if (runToken !== null && entry.kind === "poll") {
+        await this.#removePollShare(holderKey, entry, runToken);
+        continue;
+      }
       for (let attempt = 0; attempt <= MAX_QUEUE_RETRIES; attempt += 1) {
         const kindValues = Object.fromEntries(kinds.map((kind, index) => [`:kind${index}`, kind]));
         try {
