@@ -245,9 +245,9 @@ def test_the_lock_step_runs_only_when_the_gate_says_so_and_cannot_fail_the_job_b
     assert lock["with"]["aws_region"] == "${{ inputs.aws_region }}"
 
 
-def test_the_lock_action_is_pinned_to_the_floating_v0_not_a_branch():
-    """A branch pin is fine for a canary, but merged it would break every deploy once the branch is deleted."""
-    assert step("dev-lock")["uses"] == "catenaclearing/catena-actions/actions/dev-lock@v0"
+def test_the_lock_action_is_pinned_to_a_commit_that_contains_it():
+    """Job setup must not depend on the v0 release workflow racing the first deploy after merge."""
+    assert step("dev-lock")["uses"] == "catenaclearing/catena-actions/actions/dev-lock@38b4e6d5234dc9064d8014170b5aba84e392c7c1"
 
 
 def test_a_deliberate_block_stops_the_deploy_and_nothing_else_does():
