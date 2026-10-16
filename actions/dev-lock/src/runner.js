@@ -53,6 +53,16 @@ const LOOK_AGAIN = Symbol("look again");
 /** Returned when this run took the lock over from a manual hold: it holds the lock, and has set its own outputs. */
 const PREEMPTED = Symbol("preempted");
 
+/** Write this holder's queue entry and return its position, or null (after a warning) when the write failed. */
+async function queuePosition(write, out) {
+  try {
+    return await write();
+  } catch (error) {
+    out.warning(`dev-lock could not update the queue (${error?.name ?? "Error"}: ${error?.message ?? error}); queue position unknown.`);
+    return null;
+  }
+}
+
 /** Act on a live lock held by someone else. Returns the exit code, null to keep waiting, LOOK_AGAIN or PREEMPTED. */
 async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) {
   const decision = decide(mode, lock.holderType, { isMainPush: settings.isMainPush });
@@ -84,23 +94,29 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
     return PREEMPTED;
   }
 
+  // From here on the deploy must not go ahead: someone else holds dev. The queue is only bookkeeping, so a queue write
+  // that fails is a warning, never a reason to fail open (run() would let this deploy run alongside theirs).
   if (decision === Decision.BLOCK) {
-    const position = await store.enqueue(settings, "notify");
+    const position = await queuePosition(() => store.enqueue(settings, "notify"), out);
     out.error(
-      `Dev is locked by ${holder}. You are #${position} in the queue; the #dev-deploys bot will ping you when it is your turn. ` +
+      `Dev is locked by ${holder}. You are ${position === null ? "in the queue (position unknown)" : `#${position} in the queue`}; the #dev-deploys bot will ping you when it is your turn. ` +
         "Re-run this job once dev is free.",
     );
     return 1;
   }
 
-  // Decision.WAIT: a merge to main waits for the CI deploy ahead of it.
-  const position = await store.enqueue(settings, "poll");
+  // Decision.WAIT: a merge to main waits for the CI deploy ahead of it. A failed queue write does not stop the wait.
+  const position = await queuePosition(() => store.enqueue(settings, "poll"), out);
   if (wait.since === null) {
     wait.since = clock.now();
-    out.notice(`Dev is locked by ${holder}. Waiting up to ${Math.floor(settings.waitSeconds / 60)} min (queue position #${position}).`);
+    out.notice(`Dev is locked by ${holder}. Waiting up to ${Math.floor(settings.waitSeconds / 60)} min (queue position ${position === null ? "unknown" : `#${position}`}).`);
   }
   if (clock.now() - wait.since < settings.waitSeconds) return null;
-  await store.removeQueueEntries(settings.holderKey, ["poll"]);
+  try {
+    await store.removeQueueEntries(settings.holderKey, ["poll"]);
+  } catch {
+    out.warning("dev-lock could not remove this job's queue entry; it stops counting once it is no longer refreshed.");
+  }
   out.error(
     `Gave up after ${Math.floor(settings.waitSeconds / 60)} min: dev is still locked by ${holder}. ` +
       "Production waits on this job, so re-run it once dev is free.",

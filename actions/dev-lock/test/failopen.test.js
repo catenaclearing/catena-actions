@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { run } from "../src/runner.js";
 import { LockStore } from "../src/store.js";
-import { Lab, githubEnv } from "./support.js";
+import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
 const lab = new Lab();
 before(() => lab.start());
@@ -100,6 +100,66 @@ describe("what is not swallowed", () => {
     const env = githubEnv({ AWS_ENDPOINT_URL: lab.endpoint, INPUT_TABLE_NAME: ctx.tableName });
 
     assert.equal(await run("acquire", { env, clock: ctx.clock, out: ctx.out }), 1);
+  });
+
+  // Once the lock is known to be someone else's, the queue is bookkeeping: failing open there would deploy alongside them.
+  const queueFails = (ctx, failing) => ({
+    send: async (command) => {
+      const key = command.input.Key ?? command.input.TransactItems?.[0]?.Delete?.Key ?? command.input.TransactItems?.[0]?.ConditionCheck?.Key;
+      const queueWrite = command.input.KeyConditionExpression || String(key?.pk ?? "").startsWith("QUEUE");
+      if (queueWrite && failing()) throw awsError("ThrottlingException");
+      return ctx.doc.send(command);
+    },
+  });
+  const runAcquire = (ctx, env, doc) =>
+    run("acquire", {
+      env: { ...env, INPUT_TABLE_NAME: ctx.tableName },
+      clock: ctx.clock,
+      out: ctx.out,
+      makeStore: () => new LockStore(doc, ctx.tableName, () => ctx.clock.now()),
+    });
+
+  it("a blocked deploy stays blocked when it cannot join the queue", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi();
+
+    assert.equal(await runAcquire(ctx, githubEnv(), queueFails(ctx, () => true)), 1);
+
+    assert.equal(ctx.out.outputs.blocked, "true");
+    assert.equal(ctx.out.outputs.acquired, "false");
+    assert.match(ctx.out.messages.find(([level]) => level === "warning")[1], /ThrottlingException.*queue position unknown/);
+    assert.match(ctx.out.messages.find(([level]) => level === "error")[1], /in the queue \(position unknown\)/);
+  });
+
+  it("a merge to main keeps waiting when it cannot join the queue, and gives up blocked", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi({ expiresAt: START + 7200 });
+
+    assert.equal(await runAcquire(ctx, mainPushEnv({ INPUT_WAIT_MINUTES: "2" }), queueFails(ctx, () => true)), 1);
+
+    assert.equal(ctx.out.outputs.blocked, "true");
+    assert.match(ctx.out.messages.find(([level]) => level === "notice")[1], /queue position unknown/);
+    assert.match(ctx.out.messages.find(([level]) => level === "error")[1], /Gave up after 2 min/);
+  });
+
+  it("a merge to main that gives up stays blocked when it cannot leave the queue", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi({ expiresAt: START + 7200 });
+    let giveUp = false;
+    const doc = queueFails(ctx, () => giveUp);
+    const realSleep = ctx.clock.sleep.bind(ctx.clock);
+    ctx.clock.sleep = async (seconds) => {
+      await realSleep(seconds);
+      giveUp = ctx.clock.now() - START >= 120; // only the final removeQueueEntries fails
+    };
+
+    assert.equal(await runAcquire(ctx, mainPushEnv({ INPUT_WAIT_MINUTES: "2" }), doc), 1);
+
+    assert.equal(ctx.out.outputs.blocked, "true");
+    assert.match(ctx.out.messages.find(([level]) => level === "error")[1], /Gave up after 2 min/);
   });
 
   it("an unknown command names itself, and an empty one is also a wiring bug", async () => {

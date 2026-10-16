@@ -483,8 +483,9 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
     assert.equal((await ctx.queueClaim(settings.holderKey)).entry_sk, (await ctx.queueItems())[0].sk);
   });
 
-  it("a claim that keeps moving ends in a failed-open run, not a loop", async () => {
+  it("a claim that keeps moving gives up, and the deploy stays blocked rather than failing open", async () => {
     const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
     await ctx.holdAsCi();
     const doc = {
       send: async (command) => {
@@ -497,6 +498,12 @@ describe("a holder's queue entry under concurrent runs (the claim item)", () => 
     const { settings, store } = ctx.make(githubEnv(), {}, doc);
 
     await assert.rejects(store.enqueue(settings, "notify"), /kept changing/);
+
+    const env = { ...githubEnv(), INPUT_TABLE_NAME: ctx.tableName };
+    const makeStore = () => new LockStore(doc, ctx.tableName, () => ctx.clock.now());
+    assert.equal(await run("acquire", { env, clock: ctx.clock, out: ctx.out, makeStore }), 1);
+    assert.equal(ctx.out.outputs.blocked, "true");
+    assert.match(ctx.out.messages.find(([level]) => level === "warning")[1], /kept changing/);
   });
 });
 

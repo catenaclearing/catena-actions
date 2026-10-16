@@ -41,7 +41,11 @@ lock over. The lock item becomes an ordinary CI lease held by that run (its sibl
 waits or is blocked behind it), the hold is kept in `preempted_hold`, and `preempted_by` / `preempted_at` are set so
 the Slack bot can tell the holder. When the last run of that merge releases, the hold is put back if it has not run
 out, still carrying `preempted_by`; otherwise the lock is freed. That last write is conditional on `preempted_hold`
-being unchanged since it was read, so an unlock or extend from the Slack bot in between is never undone. The
+being unchanged since it was read, so an unlock or extend from the Slack bot in between is never undone. If the lease
+expires first (the merge's runner was cancelled or killed, so its post step never ran), the lease is not free while its
+hold is live: the next acquirer (or the Slack bot's sweep) puts the hold back first, conditional on the expired lease
+and its hold being exactly what it read, and then acts on the hold as usual (a merge takes it over again, a PR is
+blocked). A hold that is put back leaves out the `stolen_from_*` / `steal_reason` record of a steal it began as. The
 takeover is conditional on exactly the hold that was read (same holder, `started_at` and `expires_at`, still live): if it ended or changed in between (`/dev unlock`,
 `/dev extend`, it expired) the run reads the lock again, which takes the lock, takes the new hold over, or, if a CI
 deploy got there first, waits behind it like any other merge to main.
@@ -81,7 +85,8 @@ stale `poll`) is not revived: the holder gets a new entry at the back of the que
 `composite/deploy-cdk` runs this action with `continue-on-error: true` and stops the job itself in a later step
 when `blocked` is `true`. That way a bug in the action or an unreachable lock store lets the deploy go ahead,
 and only a deliberate block stops it. The action still exits 1 on a block so the step shows red and the reason
-is visible.
+is visible. It fails open only while it does not know who holds dev: once it has found someone else holding it, a
+queue write that fails is a warning ("queue position unknown") and the deploy is still blocked, or still waits.
 
 ## Runtime mode (the kill switch)
 

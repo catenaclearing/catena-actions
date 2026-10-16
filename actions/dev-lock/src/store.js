@@ -13,6 +13,22 @@ const MAX_FINISH_RETRIES = 5;
 
 const isConditionFailure = (error) => error?.name === "ConditionalCheckFailedException";
 
+/**
+ * The lock item that gives a preempted manual hold back, from the takeover lease that kept it.
+ *
+ * Without the record of a steal the hold may have started as (`stolen_from_*`, `steal_reason`): the Slack bot announces
+ * a new holder that carries one as a steal, and that steal is long over.
+ */
+function restoredHold(lease) {
+  const kept = Object.fromEntries(
+    Object.entries(lease.preempted_hold).filter(([field]) => !field.startsWith("stolen_") && field !== "steal_reason"),
+  );
+  const item = { ...kept, ...LOCK_KEY };
+  if (lease.preempted_by !== undefined) item.preempted_by = lease.preempted_by;
+  if (lease.preempted_at !== undefined) item.preempted_at = lease.preempted_at;
+  return item;
+}
+
 /** The current holder of the dev lock. */
 export class Lock {
   constructor(fields) {
@@ -82,7 +98,12 @@ export class LockStore {
     return Item ? Lock.fromItem(Item) : null;
   }
 
-  /** Take the lock if nobody holds it or the holder's lock has expired. A fresh start: new `started_at`, only this run. */
+  /**
+   * Take the lock if nobody holds it or the holder's lock has expired. A fresh start: new `started_at`, only this run.
+   *
+   * An expired takeover lease whose preempted manual hold is still live is not free: the hold is given back first (the
+   * merge's post step never did), and this returns false so the caller reads the lock again and acts on the hold.
+   */
   async putIfFree(settings) {
     const now = this.now();
     const item = {
@@ -102,8 +123,49 @@ export class LockStore {
         new PutCommand({
           TableName: this.tableName,
           Item: item,
-          ConditionExpression: "attribute_not_exists(pk) OR expires_at < :now",
+          ConditionExpression:
+            "attribute_not_exists(pk) OR (expires_at < :now AND (attribute_not_exists(preempted_hold) OR preempted_hold.expires_at < :now))",
           ExpressionAttributeValues: { ":now": now },
+        }),
+      );
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+      await this.restoreExpiredTakeover();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Give back the manual hold an expired takeover lease kept, if that hold is still live. Returns whether it did.
+   *
+   * The lease ran out before the merge's post step released it (a cancelled or killed runner), so nothing else would:
+   * replacing or deleting the expired lease would lose the hold. The write is conditional on the lease and its hold
+   * being exactly what was read and the lease still expired, as in #finishRelease, so a release, `/dev unlock`,
+   * `/dev extend` or another restore in between makes it do nothing.
+   */
+  async restoreExpiredTakeover() {
+    const now = this.now();
+    const { Item: lease } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: LOCK_KEY, ConsistentRead: true }));
+    const hold = lease?.preempted_hold;
+    if (!hold || Number(lease.expires_at) >= now || Number(hold.expires_at) < now) return false;
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: restoredHold(lease),
+          ConditionExpression:
+            "holder_key = :lk AND started_at = :ls AND expires_at = :le AND expires_at < :now AND " +
+            "preempted_hold.holder_key = :hk AND preempted_hold.started_at = :hs AND preempted_hold.expires_at = :he",
+          ExpressionAttributeValues: {
+            ":lk": lease.holder_key,
+            ":ls": lease.started_at,
+            ":le": lease.expires_at,
+            ":now": now,
+            ":hk": hold.holder_key,
+            ":hs": hold.started_at,
+            ":he": hold.expires_at,
+          },
         }),
       );
     } catch (error) {
@@ -214,7 +276,7 @@ export class LockStore {
           await this.doc.send(
             new PutCommand({
               TableName: this.tableName,
-              Item: { ...hold, ...LOCK_KEY, preempted_by: item.preempted_by, preempted_at: item.preempted_at },
+              Item: restoredHold(item),
               ConditionExpression: unchanged,
               ExpressionAttributeValues: values,
             }),

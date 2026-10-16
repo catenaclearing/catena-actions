@@ -3,8 +3,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { acquire, release, run } from "../src/runner.js";
+import { LockStore } from "../src/store.js";
 import { Output } from "../src/github.js";
 import { Lab, START, githubEnv, mainPushEnv } from "./support.js";
 
@@ -294,6 +295,116 @@ describe("releasing a lease that preempted a manual hold", () => {
 
     await release(sibling.settings, sibling.store, ctx.out);
     assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
+  });
+});
+
+describe("a takeover lease that expires before its post step releases it", () => {
+  // The merge's runner was cancelled or killed, so its post step never gave the hold back.
+  async function expiredTakeover(ctx, { holdExpiresAt = START + 5 * 3600, hold = {} } = {}) {
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual({ expiresAt: holdExpiresAt });
+    if (Object.keys(hold).length) await ctx.put({ ...(await ctx.currentLock()), ...hold });
+    const merge = ctx.make(mainPushEnv());
+    await acquire(merge.settings, merge.store, ctx.clock, ctx.out);
+    assert.equal((await ctx.currentLock()).preempted_hold.holder_key, "manual#U123");
+    ctx.clock.current = START + merge.settings.ttlSeconds + 1;
+    return merge;
+  }
+
+  it("gives the hold back to its holder instead of letting a PR deploy take dev", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeover(ctx);
+    const pr = ctx.make(githubEnv());
+
+    assert.equal(await acquire(pr.settings, pr.store, ctx.clock, ctx.out), 1);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_type, "manual");
+    assert.equal(lock.holder_key, "manual#U123");
+    assert.equal(lock.started_at, START - 60);
+    assert.equal(lock.expires_at, START + 5 * 3600);
+    assert.equal(lock.preempted_hold, undefined);
+    assert.equal(lock.run_ids, undefined);
+    assert.equal(ctx.out.outputs.blocked, "true");
+  });
+
+  it("lets the next merge to main take the given-back hold over again, keeping it to give back", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeover(ctx);
+    const next = ctx.make(mainPushEnv({ GITHUB_RUN_ID: "1009" }));
+
+    assert.equal(await acquire(next.settings, next.store, ctx.clock, ctx.out), 0);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_key, next.settings.holderKey);
+    assert.deepEqual([...lock.run_ids], [next.settings.runToken]);
+    assert.equal(lock.preempted_hold.holder_key, "manual#U123");
+    assert.equal(lock.preempted_hold.expires_at, START + 5 * 3600);
+  });
+
+  it("frees dev as usual when the hold ran out too", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeover(ctx, { holdExpiresAt: START + 600 });
+    const pr = ctx.make(githubEnv());
+
+    assert.equal(await acquire(pr.settings, pr.store, ctx.clock, ctx.out), 0);
+
+    assert.equal((await ctx.currentLock()).holder_key, pr.settings.holderKey);
+  });
+
+  it("gives back a hold that started as a steal without the steal, so it is not announced again", async () => {
+    const ctx = await lab.fresh();
+    const steal = { stolen_from_key: "manual#U555", stolen_from_type: "manual", stolen_from_actor: "frank", steal_reason: "hotfix" };
+    await expiredTakeover(ctx, { hold: { ...steal, stolen_from_slack_user: "U555", stolen_preempted_key: "manual#U777" } });
+    const pr = ctx.make(githubEnv());
+
+    await acquire(pr.settings, pr.store, ctx.clock, ctx.out);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_key, "manual#U123");
+    assert.deepEqual(
+      Object.keys(lock).filter((field) => field.startsWith("stolen_") || field === "steal_reason"),
+      [],
+    );
+  });
+
+  it("an ordinary release also gives back a stolen hold without the steal", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual();
+    await ctx.put({ ...(await ctx.currentLock()), stolen_from_key: "ci#x", stolen_from_type: "ci", steal_reason: "hotfix" });
+    const merge = ctx.make(mainPushEnv());
+    await acquire(merge.settings, merge.store, ctx.clock, ctx.out);
+
+    await release(merge.settings, merge.store, ctx.out);
+
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_key, "manual#U123");
+    assert.equal(lock.stolen_from_key, undefined);
+    assert.equal(lock.steal_reason, undefined);
+  });
+
+  it("does not give back a hold `/dev unlock` dropped while the restore was in flight", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeover(ctx);
+    let unlocked = false;
+    const doc = {
+      send: async (command) => {
+        if (!unlocked && command instanceof PutCommand && command.input.Item.holder_type === "manual") {
+          unlocked = true;
+          await ctx.doc.send(
+            new UpdateCommand({ TableName: ctx.tableName, Key: { pk: "LOCK#dev", sk: "CURRENT" }, UpdateExpression: "REMOVE preempted_hold" }),
+          );
+        }
+        return ctx.doc.send(command);
+      },
+    };
+    const pr = ctx.make(githubEnv(), {}, doc);
+
+    assert.equal(await acquire(pr.settings, new LockStore(doc, ctx.tableName, () => ctx.clock.now()), ctx.clock, ctx.out), 0);
+
+    assert.ok(unlocked);
+    assert.equal((await ctx.currentLock()).holder_key, pr.settings.holderKey);
   });
 });
 
