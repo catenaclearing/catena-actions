@@ -57,7 +57,7 @@ jobs:
     # in CI if this endpoint is missing.
     services:
       dynamodb:
-        image: amazon/dynamodb-local:3.1.0 # its default command is `-jar DynamoDBLocal.jar -inMemory`
+        image: amazon/dynamodb-local:3.1.0  # its default command is `-jar DynamoDBLocal.jar -inMemory`
         ports:
           - 8000:8000
     env:
