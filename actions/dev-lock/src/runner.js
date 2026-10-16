@@ -113,7 +113,7 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
   }
   if (clock.now() - wait.since < settings.waitSeconds) return null;
   try {
-    await store.removeQueueEntries(settings.holderKey, ["poll"]);
+    await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
   } catch {
     out.warning("dev-lock could not remove this job's queue entry; it stops counting once it is no longer refreshed.");
   }
@@ -178,7 +178,7 @@ export async function acquire(settings, store, clock, out) {
 export async function release(settings, store, out) {
   const held = await store.release(settings);
   // A blocked deploy's `notify` entry stays: it is how that deployer gets pinged when dev is free.
-  await store.removeQueueEntries(settings.holderKey, ["poll"]);
+  await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
   if (held) out.notice(`Released the dev lock for run ${settings.runToken}.`);
   return 0;
 }

@@ -153,6 +153,25 @@ describe("transactions against DynamoDB Local", { skip }, () => {
     assert.equal(await read(ctx, claimKey), null);
   });
 
+  it("a poll cleanup removes one waiter transactionally and deletes the entry with the final claim", async () => {
+    const ctx = await lab.fresh();
+    await ctx.holdAsCi();
+    const first = ctx.make(githubEnv({ GITHUB_RUN_ID: "1001" }));
+    const second = ctx.make(githubEnv({ GITHUB_RUN_ID: "1002" }));
+    await first.store.enqueue(first.settings, "poll");
+    await second.store.enqueue(second.settings, "poll");
+
+    await first.store.removeQueueEntries(first.settings.holderKey, ["poll"], first.settings.runToken);
+
+    const [entry] = await ctx.queueItems();
+    assert.deepEqual(entry.poll_run_ids, new Set([second.settings.runToken]));
+    assert.equal((await read(ctx, claimKey)).entry_sk, entry.sk);
+
+    await second.store.removeQueueEntries(second.settings.holderKey, ["poll"], second.settings.runToken);
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(await read(ctx, claimKey), null);
+  });
+
   it("leaving the queue rolls back as a whole when the claim moved: the entry is not deleted without its claim", async () => {
     const ctx = await lab.fresh();
     await ctx.holdAsCi();
