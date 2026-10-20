@@ -27,7 +27,12 @@ runs:
       env:
         MACHINE_USER_PAT: ${{ inputs.machine_user_pat }}
       run: |
-        git config --global url."https://$MACHINE_USER_PAT@github.com/".insteadOf "https://github.com/"
+        # Keep the PAT out of the URL: newer curl strips credentials from the effective URL,
+        # git mistakes that for a redirect and drops them. A credential helper survives it.
+        echo "::add-mask::$MACHINE_USER_PAT"
+        git config --global credential.https://github.com.helper store
+        printf 'protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\n\n' "$MACHINE_USER_PAT" \
+          | git credential approve
 
     - name: Install Node.js
       id: install-node

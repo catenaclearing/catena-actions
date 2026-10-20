@@ -17,6 +17,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Set Up Python Environment
-        uses: catenaclearing/catena-actions/composite/setup-python@main
+        uses: ./composite/setup-python
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
+
+      - name: Check access to a private repository
+        run: git ls-remote https://github.com/catenaclearing/catena-utils-package.git HEAD

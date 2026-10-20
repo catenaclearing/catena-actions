@@ -17,6 +17,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Node environment
-        uses: catenaclearing/catena-actions/composite/setup-node@main
+        uses: ./composite/setup-node
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
+
+      - name: Check access to a private repository
+        run: git ls-remote https://github.com/catenaclearing/catena-utils-package.git HEAD
