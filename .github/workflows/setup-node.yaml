@@ -21,8 +21,5 @@ jobs:
         with:
           machine_user_pat: ${{ secrets.MACHINE_USER_PAT }}
 
-      # Run outside the checkout, as poetry/npm clones do: inside it, actions/checkout's
-      # GITHUB_TOKEN header is sent instead and can't see other private repos.
-      - name: Check access to a private repository
-        working-directory: ${{ runner.temp }}
-        run: git ls-remote https://github.com/catenaclearing/catena-utils-package.git HEAD
+      - name: Clone a private repository from the workspace, as poetry/npm do
+        run: git clone --depth 1 https://github.com/catenaclearing/catena-utils-package.git "$RUNNER_TEMP/private-repo-check"
