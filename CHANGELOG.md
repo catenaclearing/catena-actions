@@ -1,3 +1,9 @@
+## 0.16.2 (2026-10-20)
+
+### Fix
+
+- **PLAT-539**: document how setup actions pass the PAT to git, and release the credential-helper fix to v0 (#100)
+
 ## 0.16.1 (2026-10-16)
 
 ## 0.16.0 (2026-10-16)
