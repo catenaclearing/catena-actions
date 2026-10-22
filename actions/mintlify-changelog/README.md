@@ -1,5 +1,22 @@
 # Generate Mintlify Changelog PR
 
+> [!WARNING]
+> **Deprecated (FE-898). Do not add this to new workflows; remove it from existing ones.**
+>
+> This action starts one Mintlify agent job per service deploy through
+> `POST /v1/agent/{projectId}/job`, which Mintlify has deprecated (its v2
+> replacement is removed on 1 November 2026). One change shipped in several
+> services also became several changelog PRs racing for one version (FE-897).
+>
+> API changelogs are now generated in `telematics-api-docs` by the scheduled
+> **Changelog Detect** workflow, which diffs every published spec and triggers a
+> single Mintlify automation. See `.changelog/README.md` in that repo. To cover
+> a new API there, add it to `APIS` in `.github/scripts/detect-api-changes.py`.
+>
+> Every known caller has been removed or has a removal PR open under FE-898. The
+> action stays at `@v0` so a caller that's still pinned keeps running, with a
+> deprecation warning in its log, until it's removed.
+
 Trigger a mintlify agent job to create a PR with the changelog from OpenAPI spec changes. Uses `oasdiff` to generate structured diffs between OpenAPI 3.x specifications.
 
 ## Usage

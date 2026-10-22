@@ -2,6 +2,9 @@
 
 set -e
 
+# Deprecated (FE-898): see README.md. Warn any caller that still uses it.
+echo "::warning::catena-actions/actions/mintlify-changelog is deprecated (FE-898) and uses Mintlify's deprecated v1 agent-job API. API changelogs now come from the Changelog Detect workflow in telematics-api-docs; remove this step."
+
 # Check if INPUT_MINTLIFY_TOKEN is set
 if [[ -z "${INPUT_MINTLIFY_TOKEN}" ]]; then
   echo 'Missing input "mintlify_token: ${{ secrets.MINTLIFY_TOKEN }}".'
