@@ -13,8 +13,9 @@
 > single Mintlify automation. See `.changelog/README.md` in that repo. To cover
 > a new API there, add it to `APIS` in `.github/scripts/detect-api-changes.py`.
 >
-> No workflow in the org calls this action any more. It stays at `@v0` only so a
-> pinned caller fails loudly rather than disappearing.
+> Every known caller has been removed or has a removal PR open under FE-898. The
+> action stays at `@v0` so a caller that's still pinned keeps running, with a
+> deprecation warning in its log, until it's removed.
 
 Trigger a mintlify agent job to create a PR with the changelog from OpenAPI spec changes. Uses `oasdiff` to generate structured diffs between OpenAPI 3.x specifications.
 
