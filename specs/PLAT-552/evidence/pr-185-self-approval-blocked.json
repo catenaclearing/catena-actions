@@ -1,0 +1,52 @@
+{
+  "captured_at": "2026-10-24T20:58:36Z",
+  "test": "negative: last pusher approves own catena-machine PR",
+  "pr": "https://github.com/catenaclearing/catena-platform/pull/185",
+  "pr_rest": {
+    "author": "catena-machine",
+    "commit_authors": [
+      "kamalgill"
+    ],
+    "headRefName": "plat-552-verify",
+    "headRefOid": "b43b178033657352724842fe4a1f6cd3089e220d",
+    "number": 185,
+    "required_checks": [
+      {
+        "conclusion": "SUCCESS",
+        "name": "Test (infra/network_security/functions/slack_alarms)"
+      },
+      {
+        "conclusion": "SUCCESS",
+        "name": "Test (.)"
+      },
+      {
+        "conclusion": "SUCCESS",
+        "name": "Lint"
+      },
+      {
+        "conclusion": "SUCCESS",
+        "name": "Checkov"
+      }
+    ],
+    "reviews": [
+      {
+        "author": "kamalgill",
+        "commit": "b43b178033657352724842fe4a1f6cd3089e220d",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-24T20:55:23Z"
+      },
+      {
+        "author": "copilot-pull-request-reviewer",
+        "commit": "b43b178033657352724842fe4a1f6cd3089e220d",
+        "state": "COMMENTED",
+        "submittedAt": "2026-10-24T20:56:32Z"
+      }
+    ],
+    "title": "DO NOT MERGE: PLAT-552 verify self-approval is blocked"
+  },
+  "merge_state": {
+    "mergeStateStatus": "BLOCKED",
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "REVIEW_REQUIRED"
+  }
+}
