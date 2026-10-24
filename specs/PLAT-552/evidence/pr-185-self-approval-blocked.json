@@ -48,5 +48,21 @@
     "mergeStateStatus": "BLOCKED",
     "mergeable": "MERGEABLE",
     "reviewDecision": "REVIEW_REQUIRED"
+  },
+  "last_push": {
+    "source": "GET /repos/catenaclearing/catena-platform/activity?ref=refs/heads/plat-552-verify",
+    "captured_at": "2026-10-24T21:14:59Z",
+    "note": "require_last_push_approval checks who pushed the head commit, not who authored it. The only push to the branch is by kamalgill, and its after SHA is the PR head that kamalgill approved.",
+    "pushes": [
+      {
+        "activity_type": "branch_creation",
+        "actor": "kamalgill",
+        "after": "b43b178033657352724842fe4a1f6cd3089e220d",
+        "before": "0000000000000000000000000000000000000000",
+        "ref": "refs/heads/plat-552-verify",
+        "timestamp": "2026-10-24T20:54:53Z"
+      }
+    ],
+    "head_sha_matches_last_push": true
   }
 }

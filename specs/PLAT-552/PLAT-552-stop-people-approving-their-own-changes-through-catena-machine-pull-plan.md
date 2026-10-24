@@ -11,7 +11,7 @@ has `require_last_push_approval: true`. Nothing else in the ruleset changed. Evi
 | `ruleset-8576896-after.json` | The ruleset after the change. Its `rules` differ from the before file in this one flag only |
 | `ruleset-8576896-history.json` | GitHub's version history for the ruleset. Version `54627799`, actor `kamalgill` (id 133923), 2026-10-24T13:51:40-07:00 |
 | `repo-coverage.txt` | The effective rule on the default branch of all 70 non-archived org repos. Every one reports `true` |
-| `pr-185-self-approval-blocked.json` | Negative test (2026-10-24, 20:55–20:58 UTC). [catenaclearing/catena-platform#185](https://github.com/catenaclearing/catena-platform/pull/185) was opened by `catena-machine`, its only commit is by `kamalgill`, and `kamalgill` approved it. All four required checks passed, yet GitHub reports `reviewDecision: REVIEW_REQUIRED` and `mergeStateStatus: BLOCKED` |
+| `pr-185-self-approval-blocked.json` | Negative test (2026-10-24, 20:55–20:58 UTC). [catenaclearing/catena-platform#185](https://github.com/catenaclearing/catena-platform/pull/185) was opened by `catena-machine`. Its only commit is by `kamalgill`, and GitHub's repo activity API records `kamalgill` as the account that pushed it (`last_push`). `kamalgill` approved it. All four required checks passed, yet GitHub reports `reviewDecision: REVIEW_REQUIRED` and `mergeStateStatus: BLOCKED` |
 
 The org audit-log REST API returns 404 on this plan, so the ruleset's version history stands in for the audit-log entry.
 The ruleset's **History** tab in the UI shows the same thing.
@@ -65,13 +65,15 @@ targets `~DEFAULT_BRANCH`, `refs/heads/main` and `refs/heads/master`. It applies
 {
   "required_approving_review_count": 1,
   "dismiss_stale_reviews_on_push": true,
-  "require_last_push_approval": false,        // <-- the gap
+  "require_last_push_approval": false,
   "require_code_owner_review": false,
   "require_extra_approval_for_unattributed_changes": true,
   "required_review_thread_resolution": false,
   "allowed_merge_methods": ["squash"]
 }
 ```
+
+`require_last_push_approval: false` is the gap.
 
 Its bypass actors are `OrganizationAdmin` with `bypass_mode: always`.
 
@@ -187,11 +189,21 @@ This closes gap 1. Do it if the auditor reads DCF-5 as "no author of any commit 
   check wouldn't re-run when someone approves.
 - **Triggers:** `pull_request` (`opened`, `synchronize`, `ready_for_review`) and `pull_request_review`
   (`submitted`, `dismissed`).
-- **Logic:** collect the GitHub logins of every commit author and committer in the PR (`GET /pulls/{n}/commits`, plus
-  `Co-authored-by` trailers that resolve to org members). Pass only if at least one `APPROVED` review whose
-  `commit_id == head.sha` comes from a login outside that set. Ignore `catena-machine`, `github-actions[bot]` and
-  `claude` / Copilot identities, which count as neither authors nor approvers. Signed commits are already required by
-  the ruleset (`required_signatures`), which makes commit authorship trustworthy.
+- **Logic:** build the set of people who contributed to the PR, from three sources:
+  1. **Pushers.** Every account that pushed to the head branch, from the repo activity API
+     (`GET /repos/{owner}/{repo}/activity?ref=refs/heads/<branch>`). GitHub records these pushes itself, so the field
+     can't be forged, and it's the same identity `require_last_push_approval` uses.
+  2. **Verified committers.** The committer login of each commit in `GET /pulls/{n}/commits` where
+     `verification.verified` is `true`. GitHub's verification ties a signature to the committer's email only.
+  3. **Self-reported identities.** Author logins, unverified committers, and `Co-authored-by` trailers that resolve to
+     org members. Anyone can write these fields, so they only ever add people to the set and never take anyone out.
+
+  Pass only if at least one `APPROVED` review whose `commit_id == head.sha` comes from a login outside that set. Ignore
+  `catena-machine`, `github-actions[bot]` and `claude` / Copilot identities, which count as neither contributors nor
+  approvers. Don't rely on the ruleset's `required_signatures` rule here: it targets `main`, so commits on PR branches
+  don't have to be signed, and even a verified signature doesn't vouch for the author field or the trailers.
+  **Remaining limitation:** someone who commits under another person's name and has a colleague push it can still go
+  undetected. Pushers (source 1) are the only contributors this check can identify reliably.
 - **Enforce:** add the check's name as a required status check in org ruleset `8576896`.
 - **Tests:** unit tests for the set logic in `catena-actions/tests/`, plus the same negative and positive PR tests as
   Phase 1, along with a "B pushes last, A approves" case.
