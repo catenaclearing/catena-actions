@@ -45,3 +45,20 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
           stack_name: Actions-Development
 ```
+
+## Building Docker images in parallel
+
+CDK builds Docker image assets one at a time by default. A stack with several images can build them in
+parallel with `asset_build_concurrency` (passed to `cdk deploy` as `--asset-build-concurrency`):
+
+```yaml
+      - name: Deploy CDK Stack
+        uses: catenaclearing/catena-actions/composite/deploy-cdk@v0
+        with:
+          # ...
+          asset_build_concurrency: 4
+```
+
+Set it here, not as `"assetBuildConcurrency"` in `cdk.json`: the CDK CLI's command-line default of 1 for
+this flag overrides the `cdk.json` value. Standard GitHub-hosted runners have 2 vCPUs, and most of an image
+build is waiting on downloads, cache exports and pushes, so values around 3–4 are a reasonable start.
