@@ -51,7 +51,9 @@ inputs:
     description: >-
       Maximum number of assets (Docker images) CDK builds in parallel, passed as --asset-build-concurrency.
       It has to be set here rather than in cdk.json: the CDK CLI's command-line default of 1 for this flag
-      overrides a cdk.json "assetBuildConcurrency". Default "1" keeps CDK's own behaviour (one at a time).
+      overrides a cdk.json "assetBuildConcurrency". With the default "1" the flag is not passed at all, so
+      deploys are unchanged (one image at a time) and a cdk_version older than 2.1109.0, which does not know
+      the flag, keeps working. Any other value must be a positive integer and needs CDK CLI 2.1109.0 or later.
     required: false
     default: "1"
 
@@ -215,9 +217,18 @@ runs:
         if [ "$EXCLUSIVELY_FLAG" = "true" ]; then
           EXCLUSIVELY="--exclusively"
         fi
+        # Only pass --asset-build-concurrency when a caller asks for more than CDK's default of 1: CDK CLIs
+        # before 2.1109.0 reject the flag, and callers may pin cdk_version to one of them.
+        ASSET_BUILD_CONCURRENCY_ARGS=()
+        if [ "$ASSET_BUILD_CONCURRENCY" != "1" ]; then
+          if ! [[ "$ASSET_BUILD_CONCURRENCY" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::asset_build_concurrency must be a positive integer, got '$ASSET_BUILD_CONCURRENCY'."
+            exit 1
+          fi
+          ASSET_BUILD_CONCURRENCY_ARGS=(--asset-build-concurrency "$ASSET_BUILD_CONCURRENCY")
+        fi
         npx -y "aws-cdk@$CDK_VERSION" deploy "$STACK_NAME" \
-          --force --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY \
-          --asset-build-concurrency "$ASSET_BUILD_CONCURRENCY"
+          --force --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY "${ASSET_BUILD_CONCURRENCY_ARGS[@]}"
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1

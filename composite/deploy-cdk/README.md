@@ -60,5 +60,9 @@ parallel with `asset_build_concurrency` (passed to `cdk deploy` as `--asset-buil
 ```
 
 Set it here, not as `"assetBuildConcurrency"` in `cdk.json`: the CDK CLI's command-line default of 1 for
-this flag overrides the `cdk.json` value. Standard GitHub-hosted runners have 2 vCPUs, and most of an image
+this flag overrides the `cdk.json` value.
+
+The flag is only passed when the value isn't `1`, so the default leaves the deploy command exactly as it was.
+Values above 1 need CDK CLI 2.1109.0 or later (the flag's first release), which the default `cdk_version:
+latest` always is; if you pin an older `cdk_version`, leave this input at its default. Standard GitHub-hosted runners have 2 vCPUs, and most of an image
 build is waiting on downloads, cache exports and pushes, so values around 3–4 are a reasonable start.
