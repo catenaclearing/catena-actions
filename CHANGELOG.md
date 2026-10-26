@@ -1,3 +1,9 @@
+## 0.17.0 (2026-10-26)
+
+### Feat
+
+- **PLAT-543**: let deploy-cdk build Docker image assets in parallel (#103)
+
 ## 0.16.2 (2026-10-20)
 
 ### Fix
