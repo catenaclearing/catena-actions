@@ -25,7 +25,8 @@ enabled the Merge button. #185 was closed unmerged at 21:48:12 UTC.
 Still to do: the `telematics-*` repeat (optional; `repo-coverage.txt` already shows the rule applies there), attaching
 evidence to Linear, and comms.
 
-**2026-10-27:** Phase 1 stopped the `telematics-api-docs` changelog auto-merge, and a workaround is proposed. While
+**2026-10-27:** Phase 1 stopped the `telematics-api-docs` changelog auto-merge. A workaround was applied at 19:22 UTC:
+the repo now has its own org ruleset (`25986845`) without last-push approval, and is excluded from `8576896`. While
 investigating, we found that `catena-machine` is an org admin. See
 [Follow-up: `telematics-api-docs` changelog auto-merge](#follow-up-telematics-api-docs-changelog-auto-merge-2026-10-27)
 and [Finding: `catena-machine` is an org admin](#finding-catena-machine-is-an-org-admin-2026-10-27).
@@ -210,14 +211,26 @@ auto-merge waits forever. The first PR affected was `telematics-api-docs#683`:
 | 16:57:28 | `catena-machine` approves. The approval doesn't count |
 | 17:05:54 | `scottquested` approves by hand, then merges at 17:06:59 |
 
-### Proposed workaround: a dedicated org ruleset for `telematics-api-docs`
+### Workaround: a dedicated org ruleset for `telematics-api-docs` (applied 2026-10-27)
 
-1. Create an org ruleset, for example "Enforce require PR review to merge to default branch (telematics-api-docs)",
-   that targets only `telematics-api-docs`. Make it an exact copy of `8576896` except for
+1. Create an org ruleset that targets only `telematics-api-docs`. Make it an exact copy of `8576896` except for
    `require_last_push_approval: false`.
 2. Add `telematics-api-docs` to `8576896`'s `conditions.repository_name.exclude`.
 3. Save the before and after JSON of both rulesets in `evidence/`, the same way as Phase 1. Then check that the next
    Mintlify changelog PR merges unattended.
+
+**Applied 2026-10-27 by `kamalgill`, using the API.** Steps 1 and 2 are done. The new ruleset was created before the
+exclusion, so the repo was never without the org rules. Still to do: confirm the next Mintlify changelog PR merges
+unattended.
+
+| File | What it shows |
+|---|---|
+| `ruleset-8576896-before-tad-exclude.json` | `8576896` before the exclusion (`repository_name.exclude: []`) |
+| `ruleset-telematics-api-docs-created.json` | The new ruleset `25986845`, "Enforce require PR review to merge to default branch (telematics-api-docs, PLAT-552)", created 19:22:20 UTC. It targets only `telematics-api-docs`, and its rules match `8576896` except `require_last_push_approval: false` |
+| `ruleset-8576896-after-tad-exclude.json` | `8576896` after the exclusion, 19:22:30 UTC. Only `repository_name.exclude` differs from the before file |
+| `ruleset-25986845-history.json`, `ruleset-8576896-history-after-tad-exclude.json` | GitHub's version history: `55031916` (create) and `55031945` (exclude), both actor `kamalgill` (id 133923) |
+| `telematics-api-docs-main-rules-before.json`, `telematics-api-docs-main-rules-after.json` | The effective rules on the repo's `main`. After the change, deletion, `pull_request` (1 approval, dismiss stale, squash only), Copilot review, non-fast-forward and required signatures all come from `25986845`, and no `pull_request` rule requires last-push approval |
+| `repo-coverage-after-tad-exclude.txt` | All 70 non-archived repos at 19:22:55 UTC: 69 report `true`, and only `telematics-api-docs` reports `false` |
 
 Everything except last-push approval stays in force for the repo: dismiss stale approvals, required signatures,
 squash-only merging and the org-admin-only bypass. Auto-merge works again because `catena-machine` approves *after*
