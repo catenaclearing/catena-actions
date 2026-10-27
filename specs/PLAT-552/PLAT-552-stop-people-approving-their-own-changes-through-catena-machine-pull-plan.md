@@ -19,9 +19,16 @@ The ruleset's **History** tab in the UI shows the same thing.
 Kamal captured a screenshot of #185's merge box, which shows the approval requirement. The screenshot isn't stored in this
 folder.
 
-Still to do: the positive test (a second engineer approves #185 and it becomes mergeable; then close it unmerged and delete
-the branch), the `telematics-*` repeat (optional; `repo-coverage.txt` already shows the rule applies there), attaching
+Positive test passed: `shanofon` approved #185 at 2026-10-24 21:15:45 UTC, and Kamal confirmed that the approval
+enabled the Merge button. #185 was closed unmerged at 21:48:12 UTC.
+
+Still to do: the `telematics-*` repeat (optional; `repo-coverage.txt` already shows the rule applies there), attaching
 evidence to Linear, and comms.
+
+**2026-10-27:** Phase 1 stopped the `telematics-api-docs` changelog auto-merge, and a workaround is proposed. While
+investigating, we found that `catena-machine` is an org admin. See
+[Follow-up: `telematics-api-docs` changelog auto-merge](#follow-up-telematics-api-docs-changelog-auto-merge-2026-10-27)
+and [Finding: `catena-machine` is an org admin](#finding-catena-machine-is-an-org-admin-2026-10-27).
 
 ## Context
 
@@ -177,7 +184,85 @@ didn't push its last commit. Approving your own `catena-machine` PR no longer un
 2. **Org admin bypass (`bypass_mode: always`).** Org owners can merge without any approval. This is tracked under
    SEC-84 (access review of owners and rule bypass) and is out of scope here, but it should be called out to the
    auditor as a compensating-control item.
-3. **`catena-machine` PAT scope.** The shared token's blast radius is RISK-023 / SEC-85. Out of scope here.
+3. **`catena-machine` PAT scope.** The shared token's blast radius is RISK-023 / SEC-85. Out of scope here. See
+   [`catena-machine` is an org admin](#finding-catena-machine-is-an-org-admin-2026-10-27), which makes this gap and gap 2
+   one problem.
+
+## Follow-up: `telematics-api-docs` changelog auto-merge (2026-10-27)
+
+### What broke
+
+Phase 1 stopped the unattended changelog merge in `telematics-api-docs`. Its
+`.github/workflows/changelog-auto-merge.yaml` (FE-562, FE-898) runs on PRs that `mintlify[bot]` opens:
+
+1. **Push Normalised Entry** commits the published form of the entry to the PR branch through the GitHub API, as
+   `catena-machine`. The step is a no-op when the entry is already in published form.
+2. **Approve** approves the PR as `catena-machine`.
+3. **Enable Auto Merge** runs `gh pr merge --squash --auto`.
+
+When step 1 commits, `catena-machine` becomes the last pusher. Its approval in step 2 then no longer counts, so
+auto-merge waits forever. The first PR affected was `telematics-api-docs#683`:
+
+| Time (UTC, 2026-10-27) | Event |
+|---|---|
+| 16:56:48 | push by `mintlify[bot]` |
+| 16:57:15 | push by `catena-machine` (normalised entry) |
+| 16:57:28 | `catena-machine` approves. The approval doesn't count |
+| 17:05:54 | `scottquested` approves by hand, then merges at 17:06:59 |
+
+### Proposed workaround: a dedicated org ruleset for `telematics-api-docs`
+
+1. Create an org ruleset, for example "Enforce require PR review to merge to default branch (telematics-api-docs)",
+   that targets only `telematics-api-docs`. Make it an exact copy of `8576896` except for
+   `require_last_push_approval: false`.
+2. Add `telematics-api-docs` to `8576896`'s `conditions.repository_name.exclude`.
+3. Save the before and after JSON of both rulesets in `evidence/`, the same way as Phase 1. Then check that the next
+   Mintlify changelog PR merges unattended.
+
+Everything except last-push approval stays in force for the repo: dismiss stale approvals, required signatures,
+squash-only merging and the org-admin-only bypass. Auto-merge works again because `catena-machine` approves *after*
+its own push, so dismiss-stale doesn't remove that approval.
+
+**Trade-off.** People in this repo lose the last-push rule as well, not only the bot. The cost is small, because
+`telematics-api-docs` has no `on: create` workflow. `catena-machine` doesn't open PRs for people there: engineers open
+their own PRs, and GitHub already stops a PR's author from approving it. What's left is the narrow case where someone
+else pushes last and the author then approves (gap 1). The changelog auto-merge itself is a documented automation
+exception (FE-562): a bot approves bot-written, additive docs, not a person approving their own change. Tell
+Compliance about it.
+
+### Alternatives considered
+
+- **Exclude the repo and rely on its own `main-protection` ruleset (`3043537`).** This was the first idea. That ruleset
+  is weaker than the org ruleset in more ways than last-push approval. It has `dismiss_stale_reviews_on_push: false`,
+  so someone can get an approval, push more commits and merge on the old approval. That's a wider DCF-5 hole than
+  last-push. It has no `required_signatures` rule, which undoes the reason FE-697 commits through the API. It allows
+  merge and rebase as well as squash. It also lets the repo's admin role and `catena-machine` bypass it, and repo admins
+  can edit it, which they can't do to an org ruleset. If this route is chosen anyway, add dismiss-stale, required
+  signatures and squash-only merging to `main-protection` in the same change.
+- **Approve as `github-actions[bot]` instead.** This needs "Allow GitHub Actions to create and approve pull requests".
+  A `pull_request` workflow runs the PR branch's own copy of the workflow file, so any branch could then approve
+  itself. Rejected.
+- **Merge with `gh pr merge --squash --admin` (bypass).** This works today only because `catena-machine` is an org
+  admin (see the finding below). It would build on access that should be removed. Rejected.
+
+## Finding: `catena-machine` is an org admin (2026-10-27)
+
+`gh api orgs/catenaclearing/memberships/catena-machine` returns `role: admin`. Ruleset `8576896` lets
+`OrganizationAdmin` bypass it with `bypass_mode: always`, so `catena-machine` can merge or push to `main` in any repo
+without review.
+
+- **It's already in use.** `telematics-api-docs`'s **Scheduled TSP Rebuild** commits `chore: auto-regenerate TSP
+  pages` straight to `main` every 12 hours, with no PR. The commits on 2026-10-27 are at 00:25, 12:15 and 17:15 UTC,
+  all signed by GitHub and attributed to `catena-machine`. The comments in `changelog-auto-merge.yaml` (FE-695) and
+  `scheduled-tsp-rebuild.yaml` say `catena-machine` is not an org admin. They're out of date.
+- **Why it matters for DCF-5.** `MACHINE_USER_PAT` is shared with every repo. Any workflow that can read the secret
+  holds an org-owner token. A `pull_request` workflow from a branch in the same repo can read it, and it can bypass PR
+  review in any repo. This is a bigger DCF-5 exposure than the self-approval gap PLAT-552 closed. Raise it with the
+  auditor under SEC-84 (owners and rule bypass) and SEC-85 / RISK-023 (the shared token).
+- **Fixing it.** Removing the admin role is the fix, but it isn't part of PLAT-552. It also stops the TSP rebuild's
+  direct commits to `main`, so that workflow would have to open a PR, or use a narrower bypass, in the same change.
+  Check the other `MACHINE_USER_PAT` workflows first, especially `release-protected-branch`, which toggles branch
+  protection.
 
 ## Phase 2 (optional; decide after Phase 1): "Independent review" required check
 
