@@ -16,7 +16,7 @@ after(() => lab.stop());
 const setPrPolicy = (ctx, value) => ctx.put({ pk: "CONFIG", sk: "pr_policy", value });
 
 /** Put another holder in the queue, as its own run would have: an entry, and the claim naming it. */
-async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind = "poll", runs = ["2002-1-deploy-development-abcd1234"] } = {}) {
+async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind = "poll", runs = ["2002-1-deploy-development-abcd1234"], mainPush = false } = {}) {
   const sk = `${String(at * 1000).padStart(13, "0")}#00000000-0000-0000-0000-000000000000#${holderKey}`;
   await ctx.put({
     pk: QUEUE_PK,
@@ -25,13 +25,14 @@ async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind
     holder_key: holderKey,
     repo: "catenaclearing/catena-platform",
     actor: holderKey.split("#")[2],
-    ref: "refs/pull/7/merge",
+    ref: mainPush ? "refs/heads/main" : "refs/pull/7/merge",
     enqueued_at: at,
     heartbeat_at: heartbeat,
     poll_seconds: 15,
     run_url: "https://github.com/o/r/actions/runs/2002",
     ttl: START + QUEUE_ENTRY_TTL_SECONDS,
     ...(runs.length ? { poll_run_ids: new Set(runs) } : {}),
+    ...(kind === "poll" ? { main_push: mainPush } : {}),
   });
   await ctx.put({ pk: QUEUE_CLAIM_PK, sk: holderKey, entry_sk: sk, ttl: START + QUEUE_ENTRY_TTL_SECONDS });
   return sk;
@@ -39,6 +40,7 @@ async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind
 
 const CAROL = "ci#catenaclearing/catena-platform#carol#refs/pull/8/merge";
 const DAVE = "ci#catenaclearing/catena-platform#dave#refs/pull/9/merge";
+const MERGE = "ci#catenaclearing/catena-platform#erin#refs/heads/main";
 
 /** A clock for one run: shares the test's time, and calls `onSleep` before each of that run's sleeps. */
 function runClock(ctx, onSleep) {
@@ -74,12 +76,12 @@ describe("the PR policy", () => {
     }
   });
 
-  it("waits in line the same way in report-only; only what happens when it does not wait differs", () => {
+  it("is an opt-in that waits in report-only too; report-only merges still never wait", () => {
     for (const holderType of ["ci", "manual", null]) {
       assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: false, prPolicy: PrPolicy.WAIT }), Decision.WAIT);
       assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: false, prPolicy: PrPolicy.FAIL }), Decision.CONTINUE);
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: true, prPolicy: PrPolicy.WAIT }), Decision.CONTINUE);
     }
-    assert.equal(decide(Mode.REPORT_ONLY, null, { isMainPush: true }), Decision.WAIT);
   });
 });
 
@@ -220,16 +222,35 @@ describe("a PR deploy with pr_policy wait", () => {
 });
 
 describe("report-only, with pr_policy fail", () => {
-  it("a merge to main waits in line for a CI deploy (report-only waits like enforce)", async () => {
+  for (const prPolicy of ["fail", "wait"]) {
+    it(`a merge to main never waits for a CI deploy nor joins the queue: it warns and deploys at once (pr_policy ${prPolicy})`, async () => {
+      const ctx = await lab.fresh();
+      await ctx.setMode("report-only");
+      await setPrPolicy(ctx, prPolicy);
+      const key = await ctx.holdAsCi({ expiresAt: START + 100 });
+      const { settings, store } = ctx.make(mainPushEnv());
+
+      assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+      assert.deepEqual(ctx.clock.slept, []);
+      assert.deepEqual(await ctx.queueItems(), []); // so the Slack bot never says it is in line
+      assert.equal((await ctx.currentLock()).holder_key, key);
+      assert.match(text(ctx.out), /report-only mode, so this deploy would have been blocked; continuing/);
+      assert.equal(ctx.out.outputs.blocked, "false");
+    });
+  }
+
+  it("a merge to main does not wait behind others in line either: it deploys without the lock", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("report-only");
-    await ctx.holdAsCi({ expiresAt: START + 100 });
+    await queued(ctx, MERGE, { mainPush: true }); // say an enforce-era merge still waiting
     const { settings, store } = ctx.make(mainPushEnv());
 
     assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
 
-    assert.ok(ctx.clock.slept.reduce((a, b) => a + b, 0) >= 100);
-    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+    assert.deepEqual(ctx.clock.slept, []);
+    assert.equal(await ctx.currentLock(), null);
+    assert.deepEqual((await ctx.queueItems()).map((item) => item.holder_key), [MERGE]);
   });
 
   it("a merge to main goes ahead alongside a manual hold without taking it over, as before", async () => {
@@ -295,16 +316,66 @@ describe("first in, first out", () => {
     assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
   });
 
-  it("a merge to main does not jump the line either (strict FIFO)", async () => {
+  it("a merge to main goes ahead of PR deploys that were waiting before it (production waits on it)", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
-    await queued(ctx, CAROL);
-    const { settings, store } = ctx.make(mainPushEnv({ INPUT_WAIT_MINUTES: "1" }));
+    await queued(ctx, CAROL, { at: START - 60 });
+    await queued(ctx, DAVE, { at: START - 30 });
+    const { settings, store } = ctx.make(mainPushEnv());
 
-    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 1);
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
 
-    assert.equal(await ctx.currentLock(), null);
-    assert.match(text(ctx.out), /Gave up after 1 min: dev is free, but 1 deploy is waiting in line ahead of this one/);
+    assert.deepEqual(ctx.clock.slept, []);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+  });
+
+  it("a PR deploy waits behind a merge to main that is waiting, even one that arrived after it", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await setPrPolicy(ctx, "wait");
+    const alice = ctx.make();
+    await queued(ctx, alice.settings.holderKey, { at: START - 60 }); // alice was first
+    await queued(ctx, MERGE, { at: START - 30, mainPush: true });
+
+    assert.equal(await alice.store.waitersAhead(alice.settings), 1);
+  });
+
+  it("a merge to main waits behind a merge that was waiting before it (merges stay in order)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await queued(ctx, MERGE, { mainPush: true });
+    await queued(ctx, CAROL); // a PR: never ahead of a merge
+    const { settings, store } = ctx.make(mainPushEnv());
+
+    assert.equal(await store.waitersAhead(settings), 1);
+  });
+
+  it("a merge to main waits out the turn the Slack bot gave someone", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    const sk = await queued(ctx, CAROL, { kind: "notify", runs: [] });
+    await ctx.put({ ...(await ctx.queueItems()).find((item) => item.sk === sk), claim_deadline: START + 30 });
+    const { settings, store } = ctx.make(mainPushEnv());
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.ok(ctx.clock.slept.reduce((a, b) => a + b, 0) > 30);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+  });
+
+  it("a waiting merge says it is one on its queue entry", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await setPrPolicy(ctx, "wait");
+    await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const merge = ctx.make(mainPushEnv());
+    const pr = ctx.make(githubEnv({ GITHUB_ACTOR: "carol" }));
+
+    await merge.store.enqueue(merge.settings, "poll");
+    await pr.store.enqueue(pr.settings, "poll");
+
+    const byHolder = Object.fromEntries((await ctx.queueItems()).map((item) => [item.holder_key, item.main_push]));
+    assert.deepEqual(byHolder, { [merge.settings.holderKey]: true, [pr.settings.holderKey]: false });
   });
 
   it("with pr_policy fail, a PR deploy is blocked by a line even when dev is free", async () => {
@@ -425,17 +496,18 @@ describe("first in, first out", () => {
     assert.equal(await store.waitersAhead(settings), 1);
   });
 
-  it("waiters queue up and take dev one after another, in the order they arrived", async () => {
+  it("waiters take dev one after another: merges first, in the order they arrived, then PR deploys in theirs", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
     await setPrPolicy(ctx, "wait");
-    await ctx.holdAsCi({ expiresAt: START + 60 });
+    await ctx.holdAsCi({ expiresAt: START + 99999 }); // freed once everyone is in line
     const order = [];
     const runs = [
       ["alice", githubEnv({ GITHUB_ACTOR: "alice" })],
-      ["merge", mainPushEnv({ GITHUB_ACTOR: "bob" })],
       ["carol", githubEnv({ GITHUB_ACTOR: "carol" })],
+      ["merge-1", mainPushEnv({ GITHUB_ACTOR: "bob" })],
       ["dave", githubEnv({ GITHUB_ACTOR: "dave" })],
+      ["merge-2", mainPushEnv({ GITHUB_ACTOR: "erin" })],
     ];
     const finished = [];
     for (const [name, env] of runs) {
@@ -455,9 +527,10 @@ describe("first in, first out", () => {
       await arrived; // in the queue before the next one starts
       ctx.clock.current += 1;
     }
+    await ctx.deleteLock();
     await Promise.all(finished);
 
-    assert.deepEqual(order, ["alice", "merge", "carol", "dave"]);
+    assert.deepEqual(order, ["merge-1", "merge-2", "alice", "carol", "dave"]);
     assert.equal(await ctx.currentLock(), null);
     assert.deepEqual(await ctx.queueItems(), []);
   });

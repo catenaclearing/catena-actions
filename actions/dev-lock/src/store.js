@@ -404,13 +404,16 @@ export class LockStore {
   }
 
   /**
-   * Count the other holders waiting in line ahead of this one: holders with a waiting run (see isWaiting), or whose turn
-   * the Slack bot has started (see hasTurn), whose entry comes before this holder's live entry, or every one of them when
-   * this holder has no live entry yet.
+   * Count the other holders ahead of this one in the line. Only a run with nobody ahead of it tries to take a free lock.
    *
-   * This is what makes the lock first in, first out: only a run with nobody ahead of it tries to take a free lock. It is
-   * a read, not part of the conditional write, so two runs that both see nobody ahead (a new arrival in the moment the
-   * head of the line takes the lock, say) still race, and the conditional write picks one.
+   * Merges to main go first: production waits on their dev job, so they are not made to wait behind PR deploys. Ahead
+   * of a merge are only merges that were waiting before it, and a turn the Slack bot has started (see hasTurn). Ahead
+   * of a PR deploy are every waiting merge, wherever it is in the queue, the PR deploys that were waiting before it, and
+   * a started turn. "Waiting" is a run waiting in its job right now (see isWaiting); "before" is an entry earlier than
+   * this holder's live entry, or any entry when it has none yet.
+   *
+   * It is a read, not part of the conditional write, so two runs that both see nobody ahead (a new arrival in the moment
+   * the head of the line takes the lock, say) still race, and the conditional write picks one.
    */
   async waitersAhead(settings) {
     const now = this.now();
@@ -421,8 +424,12 @@ export class LockStore {
     const mine = live.some((entry) => entry.sk === claim?.entry_sk && entry.holder_key === settings.holderKey) ? claim.entry_sk : null;
     const ahead = new Set();
     for (const entry of live) {
-      if (mine !== null && entry.sk >= mine) break;
-      if (entry.holder_key !== settings.holderKey && (isWaiting(entry, now) || hasTurn(entry, now))) ahead.add(entry.holder_key);
+      if (entry.holder_key === settings.holderKey) continue;
+      const before = mine === null || entry.sk < mine;
+      const counts = hasTurn(entry, now)
+        ? true
+        : isWaiting(entry, now) && (entry.main_push === true ? !settings.isMainPush || before : !settings.isMainPush && before);
+      if (counts) ahead.add(entry.holder_key);
     }
     return ahead.size;
   }
@@ -560,7 +567,8 @@ export class LockStore {
       heartbeat_at: now,
       run_url: settings.runUrl,
       ttl: now + QUEUE_ENTRY_TTL_SECONDS,
-      ...(kind === "poll" ? { poll_seconds: settings.pollSeconds } : {}),
+      // Merges to main go ahead of waiting PR deploys (see waitersAhead), so a waiting run says which it is.
+      ...(kind === "poll" ? { poll_seconds: settings.pollSeconds, main_push: settings.isMainPush } : {}),
     };
     const once = { holder_key: settings.holderKey, repo: settings.repo, actor: settings.actor, ref: settings.ref, enqueued_at: now };
     if (settings.prUrl) once.pr_url = settings.prUrl;

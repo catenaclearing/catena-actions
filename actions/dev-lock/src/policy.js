@@ -26,12 +26,12 @@ export function parsePrPolicy(raw) {
  * Decide what to do when this run cannot take dev now: someone else holds a live lock (`holderType` is theirs), or dev
  * is free but other deploys are waiting in line ahead of it (`holderType` is null).
  *
- * Whether a run waits in line is the same in both modes: a merge to main always waits, a PR deploy waits when
- * `pr_policy` is wait. The mode only decides what happens when it does not wait, or gives up waiting: enforce stops the
- * deploy, report-only warns and deploys anyway.
+ * A PR deploy waits in line when `pr_policy` is wait, in either mode: that is an explicit opt-in. Otherwise it fails
+ * fast in enforce, and warns and deploys anyway in report-only. It never preempts a manual hold.
  *
- * A merge to main must never be stalled by a manual hold: its dev job gates the production deploy. In enforce it takes
- * the hold over; in report-only it goes ahead without touching it, as it always did. A PR deploy never preempts a hold.
+ * A merge to main waits in line only in enforce; report-only stays observational for merges, which warn and deploy at
+ * once. It must never be stalled by a manual hold either (its dev job gates the production deploy): in enforce it takes
+ * the hold over.
  */
 export function decide(mode, holderType, { isMainPush, prPolicy = PrPolicy.FAIL }) {
   const enforce = mode === Mode.ENFORCE;
@@ -39,6 +39,6 @@ export function decide(mode, holderType, { isMainPush, prPolicy = PrPolicy.FAIL 
     if (prPolicy === PrPolicy.WAIT) return Decision.WAIT;
     return enforce ? Decision.BLOCK : Decision.CONTINUE;
   }
-  if (holderType === "manual") return enforce ? Decision.PREEMPT : Decision.CONTINUE;
-  return Decision.WAIT;
+  if (!enforce) return Decision.CONTINUE;
+  return holderType === "manual" ? Decision.PREEMPT : Decision.WAIT;
 }

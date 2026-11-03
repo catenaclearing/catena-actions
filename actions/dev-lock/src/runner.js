@@ -137,8 +137,8 @@ async function cannotTakeNow(settings, store, clock, out, policy, lock, ahead, w
   if (clock.now() - wait.since < limit) return null;
 
   if (policy.mode !== Mode.ENFORCE) {
-    // report-only waits in line exactly like enforce, but never fails: when the wait runs out it leaves the line and
-    // deploys anyway, alongside whoever has dev.
+    // Only a PR deploy under pr_policy wait waits in report-only, and report-only never fails: when the wait runs out it
+    // leaves the line and deploys anyway, alongside whoever has dev.
     try {
       await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
     } catch {
@@ -200,8 +200,8 @@ export async function acquire(settings, store, clock, out) {
     if (races > MAX_RACE_RETRIES) throw new Error("the dev lock kept changing while trying to take it");
   };
   for (;;) {
-    // First in, first out: a free lock is only taken by a run with nobody waiting in line ahead of it. Joining our own
-    // holder's lock never waits in line: it is already this holder's turn.
+    // The line (merges first, then first in, first out; see LockStore.waitersAhead): a free lock is only taken by a run
+    // with nobody ahead of it. Joining our own holder's lock never waits in line: it is already this holder's turn.
     const ahead = await waitersAhead(settings, store, out, line);
     if ((ahead === 0 && (await store.putIfFree(settings))) || (await store.joinIfMine(settings))) {
       return tookLock(settings, store, out, mode);

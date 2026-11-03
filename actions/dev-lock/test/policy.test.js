@@ -26,12 +26,35 @@ describe("decide", () => {
     });
   }
 
-  it("report-only waits in line like enforce: a merge to main waits for a CI deploy", () => {
-    assert.equal(decide(Mode.REPORT_ONLY, "ci", { isMainPush: true }), Decision.WAIT);
-  });
+  // Every combination: mode x pr_policy x merge-or-PR x who is in the way (a CI deploy, a manual hold, or nobody holds
+  // dev but others are ahead in line).
+  const expected = {
+    "report-only": {
+      fail: { merge: { ci: "CONTINUE", manual: "CONTINUE", line: "CONTINUE" }, pr: { ci: "CONTINUE", manual: "CONTINUE", line: "CONTINUE" } },
+      wait: { merge: { ci: "CONTINUE", manual: "CONTINUE", line: "CONTINUE" }, pr: { ci: "WAIT", manual: "WAIT", line: "WAIT" } },
+    },
+    enforce: {
+      fail: { merge: { ci: "WAIT", manual: "PREEMPT", line: "WAIT" }, pr: { ci: "BLOCK", manual: "BLOCK", line: "BLOCK" } },
+      wait: { merge: { ci: "WAIT", manual: "PREEMPT", line: "WAIT" }, pr: { ci: "WAIT", manual: "WAIT", line: "WAIT" } },
+    },
+  };
+  for (const [mode, byPolicy] of Object.entries(expected)) {
+    for (const [prPolicy, byKind] of Object.entries(byPolicy)) {
+      for (const [kind, byHolder] of Object.entries(byKind)) {
+        for (const [holder, decision] of Object.entries(byHolder)) {
+          it(`${mode}, pr_policy ${prPolicy}, ${kind}, ${holder === "line" ? "free with others ahead" : `held by ${holder}`}: ${decision}`, () => {
+            const holderType = holder === "line" ? null : holder;
+            assert.equal(decide(mode, holderType, { isMainPush: kind === "merge", prPolicy }), Decision[decision]);
+          });
+        }
+      }
+    }
+  }
 
-  it("report-only never takes a manual hold over: a merge to main goes ahead alongside it, as before", () => {
-    assert.equal(decide(Mode.REPORT_ONLY, "manual", { isMainPush: true }), Decision.CONTINUE);
+  it("report-only stays observational for a merge to main: it never waits", () => {
+    for (const holderType of ["ci", "manual", null]) {
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: true }), Decision.CONTINUE);
+    }
   });
 
   it("a PR deploy fails fast whoever holds the lock", () => {
