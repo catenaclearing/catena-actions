@@ -182,8 +182,10 @@ runs:
         if [ "$EXCLUSIVELY_FLAG" = "true" ]; then
           EXCLUSIVELY=(--exclusively)
         fi
-        ASSEMBLY="$RUNNER_TEMP/deploy-cdk/$STACK_NAME.out"
-        rm -rf "$ASSEMBLY"
+        # A fresh directory of its own, named without stack_name: an input like "../../x" must never steer a path here.
+        # "CDK Deploy" gets it from this step's output, so a job that deploys several stacks keeps them apart.
+        mkdir -p "$RUNNER_TEMP"
+        ASSEMBLY="$(mktemp -d "$RUNNER_TEMP/deploy-cdk-assembly.XXXXXX")"
         npx -y "aws-cdk@$VERSION" synth "$STACK_NAME" "${EXCLUSIVELY[@]}" --quiet --output "$ASSEMBLY"
         # Only this stack's assets (and its dependencies' unless exclusively): the app also has stacks for other
         # accounts, which these credentials cannot publish to. --concurrency bounds builds as --asset-build-concurrency does.

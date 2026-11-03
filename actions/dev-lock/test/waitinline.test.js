@@ -206,20 +206,45 @@ describe("a PR deploy with pr_policy wait", () => {
     assert.equal(await ctx.queueClaim(settings.holderKey), null);
   });
 
-  it("in report-only, giving up keeps a notify entry another run of the holder still waits on", async () => {
+  it("in report-only, giving up turns a notify entry a live sibling still waits on into a plain wait, keeping its place", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("report-only");
     await setPrPolicy(ctx, "wait");
     await ctx.holdAsCi({ expiresAt: START + 99999 });
     const { settings, store } = ctx.make(githubEnv({ INPUT_PR_WAIT_MINUTES: "1" }));
     const sk = await queued(ctx, settings.holderKey, { kind: "notify", runs: ["sibling-run"] });
+    await ctx.put({ ...(await ctx.queueItems())[0], claim_deadline: START + 600 }); // the bot had started its turn
 
     assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
 
     const [entry] = await ctx.queueItems();
-    assert.equal(entry.sk, sk);
+    assert.equal(entry.sk, sk); // same place in line
+    assert.equal(entry.kind, "poll"); // no "your turn" ping for it any more
+    assert.equal(entry.claim_deadline, undefined);
     assert.deepEqual([...entry.poll_run_ids], ["sibling-run"]);
     assert.equal((await ctx.queueClaim(settings.holderKey)).entry_sk, sk);
+    // The sibling, still alive, refreshes it and keeps waiting there; another deploy sees it ahead.
+    const sibling = ctx.make(githubEnv({ GITHUB_RUN_ID: "1002" }));
+    await sibling.store.enqueue(sibling.settings, "poll");
+    const zoe = ctx.make(githubEnv({ GITHUB_ACTOR: "zoe" }));
+    assert.equal(await zoe.store.waitersAhead(zoe.settings), 1);
+  });
+
+  it("in report-only, a dead sibling's token does not keep the ping: the entry stops asking, then drops out once stale", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await setPrPolicy(ctx, "wait");
+    await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const { settings, store } = ctx.make(githubEnv({ INPUT_PR_WAIT_MINUTES: "1" }));
+    await queued(ctx, settings.holderKey, { kind: "notify", runs: ["dead-run"], heartbeat: START - 9999 }); // its runner died
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    const [entry] = await ctx.queueItems();
+    assert.equal(entry.kind, "poll"); // never pinged as notify again
+    const zoe = ctx.make(githubEnv({ GITHUB_ACTOR: "zoe" }));
+    ctx.clock.current += POLL_ENTRY_STALE_SECONDS + 16; // nobody refreshes it
+    assert.equal(await zoe.store.waitersAhead(zoe.settings), 0);
   });
 
   it("in report-only, a PR deploy waits behind a manual hold too (it never preempts one)", async () => {

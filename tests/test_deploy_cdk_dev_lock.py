@@ -382,8 +382,11 @@ def run_composite_step(tmp_path: Path, fake_npx: Path, script: str, **overrides:
 
 def test_the_build_synthesizes_then_publishes_only_this_stacks_assets(tmp_path, fake_npx):
     code, calls, written, _ = run_composite_step(tmp_path, fake_npx, PREBUILD["run"])
-    assembly = f"{tmp_path}/runner-temp/deploy-cdk/Example-Development.out"
+    assembly = written.removeprefix("assembly=").strip()
     assert code == 0
+    assert Path(assembly).parent == tmp_path / "runner-temp"
+    assert Path(assembly).name.startswith("deploy-cdk-assembly.")
+    assert Path(assembly).is_dir()
     assert calls == [
         "-y aws-cdk@latest --version",
         f"-y aws-cdk@2.1147.0 synth Example-Development --quiet --output {assembly}",
@@ -560,3 +563,27 @@ def test_only_the_prebuilt_path_leaves_force_out(tmp_path, fake_npx, exclusively
         )
         assert code == 0
         assert calls == [" ".join(["-y", "aws-cdk@latest", "deploy", "Example-Development", *middle, *tags, *tail])]
+
+
+@pytest.mark.parametrize("stack_name", ["../../outside", "/etc", "Example-Development"])
+def test_the_assembly_path_never_comes_from_the_stack_name(tmp_path, fake_npx, stack_name):
+    """stack_name is an input: it is only ever the stack argument to CDK, never part of a path that is created or removed."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("")
+    code, calls, written, _ = run_composite_step(tmp_path, fake_npx, PREBUILD["run"], STACK_NAME=stack_name)
+    assembly = written.removeprefix("assembly=").strip()
+    assert code == 0
+    assert stack_name not in assembly
+    assert Path(assembly).parent == tmp_path / "runner-temp"
+    assert (outside / "keep").exists()
+    assert f" synth {stack_name} " in calls[1]
+    assert f" publish-assets {stack_name} --app {assembly} " in calls[2]
+
+
+def test_each_build_gets_its_own_assembly_directory(tmp_path, fake_npx):
+    """Two deploy-cdk calls in one job (two stacks, or the same one twice) never share or delete each other's assembly."""
+    first = run_composite_step(tmp_path, fake_npx, PREBUILD["run"])[2]
+    second = run_composite_step(tmp_path, fake_npx, PREBUILD["run"])[2]
+    assert first != second
+    assert all(Path(text.removeprefix("assembly=").strip()).is_dir() for text in (first, second))

@@ -752,43 +752,80 @@ export class LockStore {
   }
 
   /**
-   * Remove this holder's `notify` entries that no run is waiting on any more, and the claim naming one of them.
+   * Stop this holder's `notify` entries from asking for a ping: for a report-only run that gave up waiting on one (a
+   * re-run after an enforce-era block) and deploys anyway, so the bot does not ping "your turn" for it later.
    *
-   * For a report-only run that gave up waiting on its holder's `notify` entry (a re-run after an enforce-era block) and
-   * deploys anyway: the deploy is happening, so the bot must not ping "your turn" for it later. Conditional on nobody
-   * waiting on it, so a sibling run still in line keeps the entry and its place. Not a transaction: a sibling that
-   * queues in between finds the entry gone and takes a new one, and the claim is only removed while it still names it.
+   * An entry no run is waiting on is removed, with the claim naming it. An entry that still has other runs' tokens
+   * becomes an ordinary `poll` entry instead, and its started turn is cancelled: which of those tokens are alive cannot
+   * be told (the heartbeat is shared, and this run refreshed it last), so the entry is not kept as a ping either way. A
+   * live sibling keeps waiting in the same place, and an enforce sibling that gives up writes `notify` again. A dead
+   * one's entry goes stale once nobody refreshes it and drops out of the line by itself.
+   *
+   * Each write is conditional on what decides it (still `notify`, no tokens or some), so a sibling that joins or leaves
+   * in between sends it down the other branch on the next pass; not a transaction, so a sibling that queues between the
+   * entry and claim deletes finds the entry gone and takes a new one, and the claim is only removed while it names it.
    */
-  async removeUnwatchedNotify(holderKey) {
+  async retireNotify(holderKey) {
     for (const entry of await this.#queue()) {
       if (entry.holder_key !== holderKey || entry.kind !== "notify") continue;
-      try {
-        await this.doc.send(
-          new DeleteCommand({
-            TableName: this.tableName,
-            Key: { pk: QUEUE_PK, sk: entry.sk },
-            ConditionExpression: "holder_key = :holder AND #kind = :notify AND (attribute_not_exists(poll_run_ids) OR size(poll_run_ids) = :zero)",
-            ExpressionAttributeNames: { "#kind": "kind" },
-            ExpressionAttributeValues: { ":holder": holderKey, ":notify": "notify", ":zero": 0 },
-          }),
+      for (let attempt = 0; attempt <= MAX_QUEUE_RETRIES; attempt += 1) {
+        if (await this.#deleteUnwatchedNotify(holderKey, entry.sk)) break;
+        if (await this.#notifyToPoll(holderKey, entry.sk)) break;
+        const { Item: current } = await this.doc.send(
+          new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: entry.sk }, ConsistentRead: true }),
         );
-      } catch (error) {
-        if (isConditionFailure(error)) continue; // someone is still waiting on it
-        throw error;
-      }
-      try {
-        await this.doc.send(
-          new DeleteCommand({
-            TableName: this.tableName,
-            Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
-            ConditionExpression: "entry_sk = :sk",
-            ExpressionAttributeValues: { ":sk": entry.sk },
-          }),
-        );
-      } catch (error) {
-        if (!isConditionFailure(error)) throw error;
+        if (!current || current.holder_key !== holderKey || current.kind !== "notify") break;
       }
     }
+  }
+
+  async #deleteUnwatchedNotify(holderKey, sk) {
+    try {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_PK, sk },
+          ConditionExpression: "holder_key = :holder AND #kind = :notify AND (attribute_not_exists(poll_run_ids) OR size(poll_run_ids) = :zero)",
+          ExpressionAttributeNames: { "#kind": "kind" },
+          ExpressionAttributeValues: { ":holder": holderKey, ":notify": "notify", ":zero": 0 },
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailure(error)) return false;
+      throw error;
+    }
+    try {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+          ConditionExpression: "entry_sk = :sk",
+          ExpressionAttributeValues: { ":sk": sk },
+        }),
+      );
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+    }
+    return true;
+  }
+
+  async #notifyToPoll(holderKey, sk) {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_PK, sk },
+          UpdateExpression: "SET #kind = :poll REMOVE #claim_deadline",
+          ConditionExpression: "holder_key = :holder AND #kind = :notify AND size(poll_run_ids) > :zero",
+          ExpressionAttributeNames: { "#kind": "kind", "#claim_deadline": "claim_deadline" },
+          ExpressionAttributeValues: { ":holder": holderKey, ":notify": "notify", ":poll": "poll", ":zero": 0 },
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailure(error)) return false;
+      throw error;
+    }
+    return true;
   }
 
   /** Remove a holder's queue entries of the given kinds, and its claim when that named one of them. */

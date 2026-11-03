@@ -77,9 +77,11 @@ The line is read, not written, so it is not part of the lock's conditional write
 exactly one in. The other then waits behind it. If the queue cannot be read at all, the run warns once and goes by the
 lock alone, as before the line existed.
 
-In report-only, a PR deploy that gives up leaves the line and deploys anyway, with a warning; a `notify` entry it waited
-on (a re-run after an enforce-era block) is removed too, unless another run of it is still waiting there, so the bot
-does not ping it for a deploy that already happened. In enforce, a PR deploy that
+In report-only, a PR deploy that gives up leaves the line and deploys anyway, with a warning. A `notify` entry it waited
+on (a re-run after an enforce-era block) stops asking for a ping, so the bot does not ping it for a deploy that already
+happened: it is removed when no other run's token is on it, and otherwise becomes a plain `poll` entry with its turn
+cancelled. Whether those other tokens belong to live runs cannot be told (the heartbeat is shared), so a live sibling
+keeps waiting in the same place, and a dead one's entry goes stale and drops out of the line by itself. In enforce, a PR deploy that
 gives up after `pr_wait_minutes` ends as a fail-fast one does: its entry becomes `notify` (keeping its
 place), the error gives its queue position, and the Slack bot pings it when dev is free. `pr_wait_minutes` `0` makes
 `wait` behave like `fail`.
