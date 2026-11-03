@@ -218,6 +218,7 @@ def test_the_lock_is_taken_after_credentials_and_before_anything_is_deployed():
     order = [
         position("Configure AWS credentials"),
         position("dev-lock-gate"),
+        position("early-guard"),
         position("prebuild"),
         position("dev-lock"),
         position("dev-lock-blocked"),
@@ -300,7 +301,7 @@ DEPLOY = step("CDK Deploy")
 
 def test_only_deploys_that_take_the_lock_build_before_it_and_the_build_cannot_fail_the_job():
     """Production, management and repos outside dev_lock_repos skip it, and run the single cdk deploy they always did."""
-    assert PREBUILD["if"] == step("dev-lock")["if"] == "steps.dev-lock-gate.outputs.is_dev_lock == 'true'"
+    assert PREBUILD["if"] == "steps.dev-lock-gate.outputs.is_dev_lock == 'true' && steps.early-guard.outcome == 'success'"
     assert PREBUILD["continue-on-error"] is True
     assert PREBUILD["shell"] == "bash"
 
@@ -445,3 +446,89 @@ def test_without_an_assembly_the_deploy_command_is_exactly_what_it_was(tmp_path,
     code, calls, _, _ = run_composite_step(tmp_path, fake_npx, DEPLOY["run"])
     assert code == 0
     assert calls == ["-y aws-cdk@latest deploy Example-Development --force --tags catena:managed-by=catenaclearing/example"]
+
+
+# --- the ownership guard, before building and before deploying ------------------------------------------------------
+
+GUARD_SCRIPT = ACTION_DIR / "stack-ownership-guard.sh"
+EARLY_GUARD = step("early-guard")
+GUARD = step("Guard against overwriting another service's stack")
+GUARD_ENV = {
+    "STACK_NAME": "${{ inputs.stack_name }}",
+    "THIS_REPO": "${{ github.repository }}",
+    "ENFORCE_OWNERSHIP_TAG": "${{ inputs.enforce_ownership_tag }}",
+    "ACTION_PATH": "${{ github.action_path }}",
+}
+
+
+def test_nothing_is_published_until_ownership_is_confirmed():
+    """Assets for a stack another repo owns must not reach the bootstrap bucket or repositories."""
+    assert position("early-guard") < position("prebuild")
+    assert "steps.early-guard.outcome == 'success'" in PREBUILD["if"]
+
+
+def test_the_early_check_only_runs_for_deploys_that_build_first_and_cannot_fail_the_job_itself():
+    """When it fails the build is skipped, and the guard before the deploy stops the deploy, as it always did."""
+    assert EARLY_GUARD["if"] == "steps.dev-lock-gate.outputs.is_dev_lock == 'true'"
+    assert EARLY_GUARD["continue-on-error"] is True
+    assert EARLY_GUARD["run"] == GUARD["run"] == '"$ACTION_PATH/stack-ownership-guard.sh"'
+    assert EARLY_GUARD["env"] == GUARD["env"] == GUARD_ENV
+
+
+def test_the_guard_before_the_deploy_still_runs_for_every_deploy_and_stops_it():
+    """It also catches a stack that changed owner while a run waited for the lock."""
+    assert "if" not in GUARD
+    assert "continue-on-error" not in GUARD
+    assert position("dev-lock") < position(GUARD["name"]) < position("CDK Deploy")
+
+
+@pytest.fixture(name="fake_cfn")
+def fake_cfn_fixture(tmp_path: Path) -> Path:
+    """A stand-in `aws` CLI for describe-stacks: prints FAKE_OWNER, or fails with FAKE_ERROR on stderr."""
+    bin_dir = tmp_path / "cfn-bin"
+    bin_dir.mkdir()
+    aws = bin_dir / "aws"
+    aws.write_text('#!/bin/sh\n[ -n "$FAKE_ERROR" ] && { echo "$FAKE_ERROR" >&2; exit 254; }\necho "$FAKE_OWNER"\n')
+    aws.chmod(0o755)
+    return bin_dir
+
+
+def run_guard(tmp_path: Path, fake_cfn: Path, **overrides: str) -> tuple[int, str]:
+    env = {
+        "PATH": f"{fake_cfn}{os.pathsep}{os.environ['PATH']}",
+        "RUNNER_TEMP": str(tmp_path),
+        "STACK_NAME": "Example-Development",
+        "THIS_REPO": "catenaclearing/example",
+        "ENFORCE_OWNERSHIP_TAG": "false",
+        "FAKE_OWNER": "catenaclearing/example",
+        **overrides,
+    }
+    result = subprocess.run(["/bin/bash", str(GUARD_SCRIPT)], env=env, capture_output=True, text=True, check=False)  # noqa: S603
+    return result.returncode, result.stdout + result.stderr
+
+
+def test_the_guard_lets_this_repos_own_stack_through(tmp_path, fake_cfn):
+    assert run_guard(tmp_path, fake_cfn)[0] == 0
+
+
+def test_the_guard_stops_a_stack_another_repo_owns(tmp_path, fake_cfn):
+    code, output = run_guard(tmp_path, fake_cfn, FAKE_OWNER="catenaclearing/someone-else")
+    assert code == 1
+    assert "managed by 'catenaclearing/someone-else'" in output
+
+
+def test_the_guard_lets_a_new_stack_through(tmp_path, fake_cfn):
+    code, output = run_guard(tmp_path, fake_cfn, FAKE_ERROR="Stack with id Example-Development does not exist")
+    assert code == 0
+    assert "does not exist yet" in output
+
+
+@pytest.mark.parametrize(("enforce", "expected"), [("false", 0), ("true", 1)])
+def test_the_guard_on_a_legacy_stack_without_the_tag(tmp_path, fake_cfn, enforce, expected):
+    assert run_guard(tmp_path, fake_cfn, FAKE_OWNER="None", ENFORCE_OWNERSHIP_TAG=enforce)[0] == expected
+
+
+def test_the_guard_fails_closed_when_it_cannot_tell(tmp_path, fake_cfn):
+    code, output = run_guard(tmp_path, fake_cfn, FAKE_ERROR="An error occurred (AccessDenied)")
+    assert code == 1
+    assert "refusing to deploy blindly" in output
