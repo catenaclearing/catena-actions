@@ -21,12 +21,18 @@ describe("parseMode", () => {
 
 describe("decide", () => {
   for (const holderType of ["ci", "manual"]) {
-    for (const isMainPush of [true, false]) {
-      it(`report-only never blocks (${holderType}, main push: ${isMainPush})`, () => {
-        assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush }), Decision.CONTINUE);
-      });
-    }
+    it(`report-only never blocks a PR deploy (${holderType})`, () => {
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: false }), Decision.CONTINUE);
+    });
   }
+
+  it("report-only waits in line like enforce: a merge to main waits for a CI deploy", () => {
+    assert.equal(decide(Mode.REPORT_ONLY, "ci", { isMainPush: true }), Decision.WAIT);
+  });
+
+  it("report-only never takes a manual hold over: a merge to main goes ahead alongside it, as before", () => {
+    assert.equal(decide(Mode.REPORT_ONLY, "manual", { isMainPush: true }), Decision.CONTINUE);
+  });
 
   it("a PR deploy fails fast whoever holds the lock", () => {
     assert.equal(decide(Mode.ENFORCE, "ci", { isMainPush: false }), Decision.BLOCK);

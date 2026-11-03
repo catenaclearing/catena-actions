@@ -89,7 +89,7 @@ async function cannotTakeNow(settings, store, clock, out, policy, lock, ahead, w
     : `Dev is free, but ${ahead} deploy${ahead === 1 ? " is" : "s are"} waiting in line ahead of this one`;
 
   if (decision === Decision.CONTINUE) {
-    out.warning(`Dev is held by ${holder}. dev-lock is in report-only mode, so this deploy would have been blocked; continuing.`);
+    out.warning(`${lock ? `Dev is held by ${holder}` : situation}. dev-lock is in report-only mode, so this deploy would have been blocked; continuing.`);
     return 0;
   }
 
@@ -136,6 +136,20 @@ async function cannotTakeNow(settings, store, clock, out, policy, lock, ahead, w
   }
   if (clock.now() - wait.since < limit) return null;
 
+  if (policy.mode !== Mode.ENFORCE) {
+    // report-only waits in line exactly like enforce, but never fails: when the wait runs out it leaves the line and
+    // deploys anyway, alongside whoever has dev.
+    try {
+      await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
+    } catch {
+      out.warning("dev-lock could not take this job out of the waiting line; it stops counting once it is no longer refreshed.");
+    }
+    out.warning(
+      `Waited ${minutes(limit)} min: ${situation.charAt(0).toLowerCase()}${situation.slice(1)}. ` +
+        "dev-lock is in report-only mode, so this deploy would have failed; continuing.",
+    );
+    return 0;
+  }
   if (!settings.isMainPush) {
     // A PR deploy that gave up ends as a blocked one does: its entry becomes `notify` (keeping its place), so the bot
     // pings the deployer when it is their turn. The kind is written before this run's token is taken out, so the entry
@@ -176,8 +190,7 @@ export async function acquire(settings, store, clock, out) {
     out.setOutput("blocked", "false");
     return 0;
   }
-  // Only read when enforcing: in report-only nothing waits or is blocked, whatever it says.
-  const policy = { mode, prPolicy: mode === Mode.ENFORCE ? parsePrPolicy(await store.getPrPolicy()) : null };
+  const policy = { mode, prPolicy: parsePrPolicy(await store.getPrPolicy()) };
 
   const wait = { since: null };
   const line = { warned: false };
@@ -187,9 +200,9 @@ export async function acquire(settings, store, clock, out) {
     if (races > MAX_RACE_RETRIES) throw new Error("the dev lock kept changing while trying to take it");
   };
   for (;;) {
-    // First in, first out (enforce only): a free lock is only taken by a run with nobody waiting in line ahead of it.
-    // Joining our own holder's lock never waits in line: it is already this holder's turn.
-    const ahead = mode === Mode.ENFORCE ? await waitersAhead(settings, store, out, line) : 0;
+    // First in, first out: a free lock is only taken by a run with nobody waiting in line ahead of it. Joining our own
+    // holder's lock never waits in line: it is already this holder's turn.
+    const ahead = await waitersAhead(settings, store, out, line);
     if ((ahead === 0 && (await store.putIfFree(settings))) || (await store.joinIfMine(settings))) {
       return tookLock(settings, store, out, mode);
     }

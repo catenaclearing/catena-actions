@@ -27,55 +27,30 @@ action.
 
 ## What it does
 
-| Situation | `report-only` (default) | `enforce`, `pr_policy` `fail` (default) | `enforce`, `pr_policy` `wait` |
-|---|---|---|---|
-| Lock is free (or expired), nobody waiting in line | take it | take it | take it |
-| Held by the same repo + actor + ref (e.g. two platform modules from one PR) | join it | join it | join it |
-| Held by someone else, **PR / label deploy** | warn, deploy anyway | **fail fast** with the queue position | **wait in line** up to `pr_wait_minutes` (30), then fail with the queue position |
-| Lock is free but others wait in line ahead, **PR / label deploy** | (nobody waits in report-only) | **fail fast** with the queue position | **wait in line** |
-| Held by a CI deploy, or free with others ahead in line, **merge to main** | warn, deploy anyway | **wait in line** up to `wait_minutes` (30), then fail | same |
-| Held by a manual hold, **merge to main** | warn, deploy anyway | deploy anyway, and tell the holder | same, even with others in line |
+Two settings decide it. `pr_policy` decides **whether a PR deploy waits in line**; a merge to main always does. The
+mode decides only **what happens when a run does not wait, or gives up waiting**: `enforce` stops the deploy,
+`report-only` warns and deploys anyway. Waiting in line itself works the same in both modes.
 
-`enforce` and `report-only` are `CONFIG/mode`; `fail` and `wait` are `CONFIG/pr_policy` (see "Runtime mode" below).
-Both are read from the table on every run. A PR deploy under `wait` never takes over a manual hold; it waits for it like
-anything else.
+| Situation | `pr_policy` `fail` (default) | `pr_policy` `wait` |
+|---|---|---|
+| Lock is free (or expired), nobody waiting in line | take it | take it |
+| Held by the same repo + actor + ref (e.g. two platform modules from one PR) | join it | join it |
+| Held by someone else, or free with others ahead in line, **PR / label deploy** | enforce: **fail fast** with the queue position; report-only: warn, deploy anyway | **wait in line** up to `pr_wait_minutes` (30), then enforce: fail with the queue position; report-only: warn, deploy anyway |
+| Held by a CI deploy, or free with others ahead in line, **merge to main** | **wait in line** up to `wait_minutes` (30), then enforce: fail; report-only: warn, deploy anyway | same |
+| Held by a manual hold, **merge to main** | enforce: take it over, deploy, and tell the holder; report-only: warn, deploy anyway | same, even with others in line |
 
-A merge to main is never stalled by a manual hold because production deploys wait on the dev deploy
-(`deploy-production` has `needs: deploy-development`). It does not deploy alongside the hold, though: it takes the
-lock over. The lock item becomes an ordinary CI lease held by that run (its sibling runs join it, every other deploy
-waits or is blocked behind it), the hold is kept in `preempted_hold`, and `preempted_by` / `preempted_at` are set so
-the Slack bot can tell the holder. When the last run of that merge releases, the hold is put back if it has not run
-out, still carrying `preempted_by`; otherwise the lock is freed. That last write is conditional on `preempted_hold`
-being unchanged since it was read, so an unlock or extend from the Slack bot in between is never undone. If the lease
-expires first (the merge's runner was cancelled or killed, so its post step never ran), the lease is not free while its
-hold is live: the next acquirer (or the Slack bot's sweep) puts the hold back first, conditional on the expired lease
-and its hold being exactly what it read, and then acts on the hold as usual (a merge takes it over again, a PR is
-blocked). A hold that is put back leaves out the `stolen_from_*` / `steal_reason` record of a steal it began as. The
-takeover is conditional on exactly the hold that was read (same holder, `started_at` and `expires_at`, still live): if it ended or changed in between (`/dev unlock`,
-`/dev extend`, it expired) the run reads the lock again, which takes the lock, takes the new hold over, or, if a CI
-deploy got there first, waits behind it like any other merge to main.
+`enforce` and `report-only` are `CONFIG/mode` (`off` skips the lock entirely); `fail` and `wait` are `CONFIG/pr_policy`
+(see "Runtime mode" below). Both are read from the table on every run. A PR deploy under `wait` never takes over a
+manual hold; it waits for it like anything else. In report-only a merge to main still never takes a hold over: it
+deploys alongside it, as it always did.
 
-For the Slack bot: while a hold is taken over, the lock item is `holder_type = ci`. `/dev unlock` from that holder
-should remove `preempted_hold` (so it is not put back), not delete the lock, which belongs to the deploy.
-
-A holder is `repo + actor + ref`, so every run of one PR or merge shares the lock; it frees when the last of them
-releases. Each call of this action gets its own share (a token in `run_ids`): run id, attempt and job name plus a
-random part, saved as action state so its post step releases exactly that share. Run id, attempt and job name alone
-are the same for every leg of a matrix job, which would let the first leg to finish free the lock under the others.
-A run that finds its own holder already has the lock joins it, never waits on it or is blocked by it.
-
-A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
-Slack bot can ping that person when dev is free. A deploy waiting in its job has a `poll` entry it refreshes on every
-poll (see "Waiting in line" for the order they go in). A holder has one queue
-entry, named by a claim item (`pk = QUEUE_CLAIM#dev`, `sk = <holder_key>`, `entry_sk`, `ttl`). The claim only moves by
-a conditional write, to a new entry, so when two runs of a holder queue at once they agree on one entry; any other entry
-of that holder is a leftover and is deleted, and the one the claim names never is. An entry that is gone or dead (a
-stale `poll`) is not revived: the holder gets a new entry at the back of the queue.
+Report-only is therefore not purely observational any more: merges to main (and PR deploys under `wait`) are delayed
+by up to their wait limit while dev is busy. What it never does is fail a deploy.
 
 ## Waiting in line (`CONFIG/pr_policy`, PLAT-590)
 
-With `pr_policy` `wait`, a PR / label deploy that cannot have dev waits in its job instead of failing, and deploys as
-soon as it is its turn. `composite/deploy-cdk` synthesizes the app and publishes its assets (Docker images, files)
+With `pr_policy` `wait`, a PR / label deploy that cannot have dev waits in its job instead of failing (or, in
+report-only, instead of deploying alongside the holder), and deploys as soon as it is its turn. `composite/deploy-cdk` synthesizes the app and publishes its assets (Docker images, files)
 before it takes the lock, so the expensive part is already done while it waits, and getting dev only leaves the
 CloudFormation deploy.
 
@@ -99,7 +74,8 @@ The line is read, not written, so it is not part of the lock's conditional write
 exactly one in. The other then waits behind it. If the queue cannot be read at all, the run warns once and goes by the
 lock alone, as before the line existed.
 
-A PR deploy that gives up after `pr_wait_minutes` ends as a fail-fast one does: its entry becomes `notify` (keeping its
+In report-only, a run that gives up leaves the line and deploys anyway, with a warning. In enforce, a PR deploy that
+gives up after `pr_wait_minutes` ends as a fail-fast one does: its entry becomes `notify` (keeping its
 place), the error gives its queue position, and the Slack bot pings it when dev is free. `pr_wait_minutes` `0` makes
 `wait` behave like `fail`.
 
@@ -132,7 +108,7 @@ place), the error gives its queue position, and the Slack bot pings it when dev 
 
 | Output | |
 |---|---|
-| `acquired` | `true` when this run holds the lock; `false` in report-only when someone else has it, when the mode is `off`, when a manual hold was overridden, and when the action failed open |
+| `acquired` | `true` when this run holds the lock; `false` in report-only when it went ahead without it, when the mode is `off`, when a manual hold was overridden, and when the action failed open |
 | `blocked` | `true` only when the deploy must stop (mode `enforce`, and it failed fast or gave up waiting); `false` in every other outcome, including a failed open |
 
 `composite/deploy-cdk` runs this action with `continue-on-error: true` and stops the job itself in a later step
@@ -156,7 +132,7 @@ aws dynamodb put-item --table-name catena-dev-lock --item \
   '{"pk": {"S": "CONFIG"}, "sk": {"S": "pr_policy"}, "value": {"S": "wait"}}'
 ```
 
-A missing `pr_policy` item, or any other value, means `fail`. It only matters in `enforce`.
+A missing `pr_policy` item, or any other value, means `fail`. It applies in both `enforce` and `report-only`.
 
 ## It never fails a deploy because the lock is broken
 

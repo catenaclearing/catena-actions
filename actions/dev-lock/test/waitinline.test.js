@@ -66,13 +66,20 @@ describe("the PR policy", () => {
     }
   });
 
-  it("does not change what a merge to main does, nor report-only", () => {
+  it("does not change what a merge to main does", () => {
     for (const prPolicy of [PrPolicy.FAIL, PrPolicy.WAIT]) {
       assert.equal(decide(Mode.ENFORCE, "ci", { isMainPush: true, prPolicy }), Decision.WAIT);
       assert.equal(decide(Mode.ENFORCE, null, { isMainPush: true, prPolicy }), Decision.WAIT);
       assert.equal(decide(Mode.ENFORCE, "manual", { isMainPush: true, prPolicy }), Decision.PREEMPT);
-      assert.equal(decide(Mode.REPORT_ONLY, "ci", { isMainPush: false, prPolicy }), Decision.CONTINUE);
     }
+  });
+
+  it("waits in line the same way in report-only; only what happens when it does not wait differs", () => {
+    for (const holderType of ["ci", "manual", null]) {
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: false, prPolicy: PrPolicy.WAIT }), Decision.WAIT);
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: false, prPolicy: PrPolicy.FAIL }), Decision.CONTINUE);
+    }
+    assert.equal(decide(Mode.REPORT_ONLY, null, { isMainPush: true }), Decision.WAIT);
   });
 });
 
@@ -150,17 +157,50 @@ describe("a PR deploy with pr_policy wait", () => {
     assert.deepEqual(await ctx.queueItems(), []);
   });
 
-  it("report-only ignores it: the deploy goes ahead and nothing is queued", async () => {
+  it("waits in line in report-only too, then takes the lock", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("report-only");
     await setPrPolicy(ctx, "wait");
-    await ctx.holdAsCi();
+    await ctx.holdAsCi({ expiresAt: START + 100 });
     const { settings, store } = ctx.make();
 
     assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
 
-    assert.deepEqual(ctx.clock.slept, []);
+    assert.ok(ctx.clock.slept.reduce((a, b) => a + b, 0) >= 100);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
     assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(ctx.out.outputs.acquired, "true");
+  });
+
+  it("in report-only, giving up deploys anyway: no failure, no ping, out of the line", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await setPrPolicy(ctx, "wait");
+    const key = await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const { settings, store } = ctx.make(githubEnv({ INPUT_PR_WAIT_MINUTES: "2" }));
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.equal(ctx.clock.slept.reduce((a, b) => a + b, 0), 120);
+    assert.equal((await ctx.currentLock()).holder_key, key); // untouched
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.match(text(ctx.out), /Waited 2 min: dev is locked by bob's deploy.*report-only mode, so this deploy would have failed; continuing/s);
+    assert.ok(!levels(ctx.out).includes("error"));
+    assert.equal(ctx.out.outputs.blocked, "false");
+    assert.equal(ctx.out.outputs.acquired, "false");
+  });
+
+  it("in report-only, a PR deploy waits behind a manual hold too (it never preempts one)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await setPrPolicy(ctx, "wait");
+    await ctx.holdAsManual({ expiresAt: START + 40 });
+    const { settings, store } = ctx.make();
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.ok(ctx.clock.slept.length > 0);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
   });
 
   for (const value of [null, "fail", "WAIT"]) {
@@ -177,6 +217,58 @@ describe("a PR deploy with pr_policy wait", () => {
       assert.deepEqual((await ctx.queueItems()).map((item) => item.kind), ["notify"]);
     });
   }
+});
+
+describe("report-only, with pr_policy fail", () => {
+  it("a merge to main waits in line for a CI deploy (report-only waits like enforce)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await ctx.holdAsCi({ expiresAt: START + 100 });
+    const { settings, store } = ctx.make(mainPushEnv());
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.ok(ctx.clock.slept.reduce((a, b) => a + b, 0) >= 100);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+  });
+
+  it("a merge to main goes ahead alongside a manual hold without taking it over, as before", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await ctx.holdAsManual();
+    const { settings, store } = ctx.make(mainPushEnv());
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.deepEqual(ctx.clock.slept, []);
+    assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
+    assert.match(text(ctx.out), /report-only mode, so this deploy would have been blocked; continuing/);
+  });
+
+  it("a PR deploy does not wait: it warns and deploys, without joining the queue", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await ctx.holdAsCi();
+    const { settings, store } = ctx.make();
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.deepEqual(ctx.clock.slept, []);
+    assert.deepEqual(await ctx.queueItems(), []);
+  });
+
+  it("a PR deploy does not take a free lock from people waiting in line; it deploys without it", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await queued(ctx, CAROL);
+    const { settings, store } = ctx.make();
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.equal(await ctx.currentLock(), null);
+    assert.match(text(ctx.out), /Dev is free, but 1 deploy is waiting in line ahead of this one\. dev-lock is in report-only mode/);
+    assert.equal(ctx.out.outputs.acquired, "false");
+  });
 });
 
 describe("first in, first out", () => {
