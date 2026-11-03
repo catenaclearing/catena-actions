@@ -212,6 +212,13 @@ export async function acquire(settings, store, clock, out) {
 
     const lock = await store.getLock();
     const free = lock === null || lock.isExpired(store.now());
+    if (free && ahead > 0 && (await store.restoreExpiredTakeover())) {
+      // putIfFree, skipped because others are ahead, is what gives back a manual hold kept by an expired takeover lease.
+      // Do it here, and look again: the hold is live, so a merge takes it over at once (production must not wait on a
+      // hold, line or not) and anything else waits on it, instead of all of them waiting behind a free-looking dev.
+      lostRace();
+      continue;
+    }
     if (free && ahead === 0) {
       // Freed or expired between our write and our read: someone else may be racing us, so just try again.
       lostRace();

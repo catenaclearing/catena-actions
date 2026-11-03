@@ -603,6 +603,79 @@ describe("first in, first out", () => {
   });
 });
 
+describe("an expired takeover lease hiding a live manual hold, with others ahead in line", () => {
+  // An earlier merge took a manual hold over and its runner died, so its post step never gave the hold back. Only
+  // putIfFree used to give it back, and a run with others ahead never calls it.
+  async function expiredTakeoverWithLine(ctx) {
+    await ctx.setMode("enforce");
+    await ctx.holdAsManual({ expiresAt: START + 5 * 3600 });
+    const earlier = ctx.make(mainPushEnv({ GITHUB_ACTOR: "zed", GITHUB_RUN_ID: "900" }));
+    assert.equal(await acquire(earlier.settings, earlier.store, ctx.clock, new Output({ echo: false })), 0);
+    assert.equal((await ctx.currentLock()).preempted_hold.holder_key, "manual#U123");
+    ctx.clock.current = START + earlier.settings.ttlSeconds + 1; // the lease has expired, the hold has not
+    const now = ctx.clock.current;
+    const turn = await queued(ctx, DAVE, { at: now - 60, kind: "notify", runs: [] });
+    await ctx.put({ ...(await ctx.queueItems()).find((item) => item.sk === turn), claim_deadline: now + 300 }); // dave's turn
+    await queued(ctx, MERGE, { at: now - 30, heartbeat: now, mainPush: true }); // and an earlier merge waiting
+  }
+
+  it("a merge to main gives the hold back and takes it over at once, line or not (enforce)", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeoverWithLine(ctx);
+    const merge = ctx.make(mainPushEnv());
+    assert.equal(await merge.store.waitersAhead(merge.settings), 2);
+
+    assert.equal(await acquire(merge.settings, merge.store, ctx.clock, ctx.out), 0);
+
+    assert.deepEqual(ctx.clock.slept, []);
+    const lock = await ctx.currentLock();
+    assert.equal(lock.holder_key, merge.settings.holderKey);
+    assert.equal(lock.preempted_hold.holder_key, "manual#U123"); // kept again, to give back after this merge
+    assert.equal(ctx.out.outputs.acquired, "true");
+  });
+
+  it("a PR deploy gives the hold back too, then waits on it rather than on a free-looking dev", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeoverWithLine(ctx);
+    await setPrPolicy(ctx, "wait");
+    const pr = ctx.make(githubEnv({ INPUT_PR_WAIT_MINUTES: "1" }));
+
+    assert.equal(await acquire(pr.settings, pr.store, ctx.clock, ctx.out), 1);
+
+    assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
+    assert.match(text(ctx.out), /Dev is locked by a manual hold by U123/);
+  });
+
+  it("in report-only a merge still never waits: it gives the hold back and deploys alongside it", async () => {
+    const ctx = await lab.fresh();
+    await expiredTakeoverWithLine(ctx);
+    await ctx.setMode("report-only");
+    const merge = ctx.make(mainPushEnv());
+    const before = (await ctx.queueItems()).length;
+
+    assert.equal(await acquire(merge.settings, merge.store, ctx.clock, ctx.out), 0);
+
+    assert.deepEqual(ctx.clock.slept, []);
+    assert.equal((await ctx.currentLock()).holder_key, "manual#U123");
+    assert.equal((await ctx.queueItems()).length, before); // never joined the queue
+    assert.equal(ctx.out.outputs.blocked, "false");
+  });
+
+  it("with no hold behind it, an expired lease is just free: a merge still waits out a turn", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await ctx.holdAsCi({ expiresAt: START - 1 });
+    const turn = await queued(ctx, DAVE, { kind: "notify", runs: [] });
+    await ctx.put({ ...(await ctx.queueItems()).find((item) => item.sk === turn), claim_deadline: START + 30 });
+    const { settings, store } = ctx.make(mainPushEnv());
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.ok(ctx.clock.slept.reduce((a, b) => a + b, 0) > 30);
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+  });
+});
+
 describe("a long wait", () => {
   it("loses more races in all than the limit in a row without giving up (which would fail open)", async () => {
     const ctx = await lab.fresh();
