@@ -59,7 +59,7 @@ ordered by when each holder joined. Ahead of a **merge to main** are only the me
 turn the Slack bot has started, below); waiting PR deploys never are, because production waits on the merge's dev job
 and two or three PRs ahead would push it past `wait_minutes`. Ahead of a **PR deploy** are every waiting merge, wherever
 it is in the queue, and the PR deploys that were waiting before it. A waiting run marks which it is with `main_push` on
-its entry. So:
+its entry; an entry without it comes from an older action, where only merges waited, so it counts as a merge. So:
 
 * a newcomer does not take dev from under people waiting for it, even when it happens to look the moment dev frees;
 * merges take dev one after another in the order they arrived, then the PR deploys in theirs;
@@ -77,7 +77,9 @@ The line is read, not written, so it is not part of the lock's conditional write
 exactly one in. The other then waits behind it. If the queue cannot be read at all, the run warns once and goes by the
 lock alone, as before the line existed.
 
-In report-only, a PR deploy that gives up leaves the line and deploys anyway, with a warning. In enforce, a PR deploy that
+In report-only, a PR deploy that gives up leaves the line and deploys anyway, with a warning; a `notify` entry it waited
+on (a re-run after an enforce-era block) is removed too, unless another run of it is still waiting there, so the bot
+does not ping it for a deploy that already happened. In enforce, a PR deploy that
 gives up after `pr_wait_minutes` ends as a fail-fast one does: its entry becomes `notify` (keeping its
 place), the error gives its queue position, and the Slack bot pings it when dev is free. `pr_wait_minutes` `0` makes
 `wait` behave like `fail`.

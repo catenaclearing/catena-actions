@@ -76,6 +76,14 @@ function isWaiting(entry, now) {
 }
 
 /**
+ * Whether a waiting entry is a merge to main's. A waiting run writes `main_push`; an entry without it was written by an
+ * action from before PR deploys could wait (v0.16.0 and earlier), where only merges to main ever waited, so it is one.
+ */
+function isMerge(entry) {
+  return entry.main_push !== false;
+}
+
+/**
  * Whether the Slack bot has given this entry its turn: once dev frees up it tells the head of the queue (a `notify`
  * entry) and holds dev for it until `claim_deadline`, so the deployer can re-run their job or `/dev lock`. A run waiting
  * in line must not take dev during that window. A skip in progress (`skip_state`) means the turn is over.
@@ -428,7 +436,7 @@ export class LockStore {
       const before = mine === null || entry.sk < mine;
       const counts = hasTurn(entry, now)
         ? true
-        : isWaiting(entry, now) && (entry.main_push === true ? !settings.isMainPush || before : !settings.isMainPush && before);
+        : isWaiting(entry, now) && (isMerge(entry) ? !settings.isMainPush || before : !settings.isMainPush && before);
       if (counts) ahead.add(entry.holder_key);
     }
     return ahead.size;
@@ -740,6 +748,46 @@ export class LockStore {
       );
     } catch (error) {
       if (!isConditionFailure(error)) throw error; // the entry is gone already
+    }
+  }
+
+  /**
+   * Remove this holder's `notify` entries that no run is waiting on any more, and the claim naming one of them.
+   *
+   * For a report-only run that gave up waiting on its holder's `notify` entry (a re-run after an enforce-era block) and
+   * deploys anyway: the deploy is happening, so the bot must not ping "your turn" for it later. Conditional on nobody
+   * waiting on it, so a sibling run still in line keeps the entry and its place. Not a transaction: a sibling that
+   * queues in between finds the entry gone and takes a new one, and the claim is only removed while it still names it.
+   */
+  async removeUnwatchedNotify(holderKey) {
+    for (const entry of await this.#queue()) {
+      if (entry.holder_key !== holderKey || entry.kind !== "notify") continue;
+      try {
+        await this.doc.send(
+          new DeleteCommand({
+            TableName: this.tableName,
+            Key: { pk: QUEUE_PK, sk: entry.sk },
+            ConditionExpression: "holder_key = :holder AND #kind = :notify AND (attribute_not_exists(poll_run_ids) OR size(poll_run_ids) = :zero)",
+            ExpressionAttributeNames: { "#kind": "kind" },
+            ExpressionAttributeValues: { ":holder": holderKey, ":notify": "notify", ":zero": 0 },
+          }),
+        );
+      } catch (error) {
+        if (isConditionFailure(error)) continue; // someone is still waiting on it
+        throw error;
+      }
+      try {
+        await this.doc.send(
+          new DeleteCommand({
+            TableName: this.tableName,
+            Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+            ConditionExpression: "entry_sk = :sk",
+            ExpressionAttributeValues: { ":sk": entry.sk },
+          }),
+        );
+      } catch (error) {
+        if (!isConditionFailure(error)) throw error;
+      }
     }
   }
 

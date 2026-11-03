@@ -138,9 +138,12 @@ async function cannotTakeNow(settings, store, clock, out, policy, lock, ahead, w
 
   if (policy.mode !== Mode.ENFORCE) {
     // Only a PR deploy under pr_policy wait waits in report-only, and report-only never fails: when the wait runs out it
-    // leaves the line and deploys anyway, alongside whoever has dev.
+    // leaves the line and deploys anyway, alongside whoever has dev. It is deploying, so a `notify` entry it waited on (a
+    // re-run after an enforce-era block) goes too, unless another run of this holder is still waiting on it: otherwise
+    // the bot would later ping "your turn" for a deploy that already happened.
     try {
       await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
+      await store.removeUnwatchedNotify(settings.holderKey);
     } catch {
       out.warning("dev-lock could not take this job out of the waiting line; it stops counting once it is no longer refreshed.");
     }

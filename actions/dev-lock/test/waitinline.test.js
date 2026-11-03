@@ -16,7 +16,7 @@ after(() => lab.stop());
 const setPrPolicy = (ctx, value) => ctx.put({ pk: "CONFIG", sk: "pr_policy", value });
 
 /** Put another holder in the queue, as its own run would have: an entry, and the claim naming it. */
-async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind = "poll", runs = ["2002-1-deploy-development-abcd1234"], mainPush = false } = {}) {
+async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind = "poll", runs = ["2002-1-deploy-development-abcd1234"], mainPush = false, legacy = false } = {}) {
   const sk = `${String(at * 1000).padStart(13, "0")}#00000000-0000-0000-0000-000000000000#${holderKey}`;
   await ctx.put({
     pk: QUEUE_PK,
@@ -32,7 +32,7 @@ async function queued(ctx, holderKey, { at = START - 30, heartbeat = START, kind
     run_url: "https://github.com/o/r/actions/runs/2002",
     ttl: START + QUEUE_ENTRY_TTL_SECONDS,
     ...(runs.length ? { poll_run_ids: new Set(runs) } : {}),
-    ...(kind === "poll" ? { main_push: mainPush } : {}),
+    ...(kind === "poll" && !legacy ? { main_push: mainPush } : {}), // a legacy (v0.16.0) waiting merge wrote none
   });
   await ctx.put({ pk: QUEUE_CLAIM_PK, sk: holderKey, entry_sk: sk, ttl: START + QUEUE_ENTRY_TTL_SECONDS });
   return sk;
@@ -192,6 +192,36 @@ describe("a PR deploy with pr_policy wait", () => {
     assert.equal(ctx.out.outputs.acquired, "false");
   });
 
+  it("in report-only, giving up also drops a notify entry it waited on, so the bot does not ping a deploy already done", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await setPrPolicy(ctx, "wait");
+    await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const { settings, store } = ctx.make(githubEnv({ INPUT_PR_WAIT_MINUTES: "1" }));
+    await queued(ctx, settings.holderKey, { kind: "notify", runs: [] }); // blocked earlier, under enforce
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.deepEqual(await ctx.queueItems(), []);
+    assert.equal(await ctx.queueClaim(settings.holderKey), null);
+  });
+
+  it("in report-only, giving up keeps a notify entry another run of the holder still waits on", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("report-only");
+    await setPrPolicy(ctx, "wait");
+    await ctx.holdAsCi({ expiresAt: START + 99999 });
+    const { settings, store } = ctx.make(githubEnv({ INPUT_PR_WAIT_MINUTES: "1" }));
+    const sk = await queued(ctx, settings.holderKey, { kind: "notify", runs: ["sibling-run"] });
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    const [entry] = await ctx.queueItems();
+    assert.equal(entry.sk, sk);
+    assert.deepEqual([...entry.poll_run_ids], ["sibling-run"]);
+    assert.equal((await ctx.queueClaim(settings.holderKey)).entry_sk, sk);
+  });
+
   it("in report-only, a PR deploy waits behind a manual hold too (it never preempts one)", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("report-only");
@@ -348,6 +378,18 @@ describe("first in, first out", () => {
     const { settings, store } = ctx.make(mainPushEnv());
 
     assert.equal(await store.waitersAhead(settings), 1);
+  });
+
+  it("an entry from an older action without main_push is a waiting merge (only merges waited before)", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await queued(ctx, MERGE, { mainPush: true, legacy: true });
+    const merge = ctx.make(mainPushEnv());
+    const pr = ctx.make(githubEnv({ GITHUB_ACTOR: "carol" }));
+
+    assert.equal(await merge.store.waitersAhead(merge.settings), 1); // a newer merge stays behind it
+    assert.equal(await pr.store.waitersAhead(pr.settings), 1);
+    assert.equal((await ctx.queueItems())[0].main_push, undefined);
   });
 
   it("a merge to main waits out the turn the Slack bot gave someone", async () => {
