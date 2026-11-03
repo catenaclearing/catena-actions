@@ -45,6 +45,38 @@ manual hold; it waits for it like anything else. `pr_policy` only changes what P
 behaves the same under either value, so in report-only it never waits and never joins the queue (and so is never
 announced as being in line).
 
+In `enforce`, a merge to main is never stalled by a manual hold, whoever is waiting in line, because production deploys wait on the dev deploy
+(`deploy-production` has `needs: deploy-development`). It does not deploy alongside the hold, though: it takes the
+lock over. The lock item becomes an ordinary CI lease held by that run (its sibling runs join it, every other deploy
+waits or is blocked behind it), the hold is kept in `preempted_hold`, and `preempted_by` / `preempted_at` are set so
+the Slack bot can tell the holder. When the last run of that merge releases, the hold is put back if it has not run
+out, still carrying `preempted_by`; otherwise the lock is freed. That last write is conditional on `preempted_hold`
+being unchanged since it was read, so an unlock or extend from the Slack bot in between is never undone. If the lease
+expires first (the merge's runner was cancelled or killed, so its post step never ran), the lease is not free while its
+hold is live: the next acquirer (or the Slack bot's sweep) puts the hold back first, even one that has others ahead of
+it in line, conditional on the expired lease and its hold being exactly what it read, and then acts on the hold as usual
+(a merge takes it over again, a PR is blocked or waits). A hold that is put back leaves out the `stolen_from_*` / `steal_reason` record of a steal it began as. The
+takeover is conditional on exactly the hold that was read (same holder, `started_at` and `expires_at`, still live): if it ended or changed in between (`/dev unlock`,
+`/dev extend`, it expired) the run reads the lock again, which takes the lock, takes the new hold over, or, if a CI
+deploy got there first, waits behind it like any other merge to main.
+
+For the Slack bot: while a hold is taken over, the lock item is `holder_type = ci`. `/dev unlock` from that holder
+should remove `preempted_hold` (so it is not put back), not delete the lock, which belongs to the deploy.
+
+A holder is `repo + actor + ref`, so every run of one PR or merge shares the lock; it frees when the last of them
+releases. Each call of this action gets its own share (a token in `run_ids`): run id, attempt and job name plus a
+random part, saved as action state so its post step releases exactly that share. Run id, attempt and job name alone
+are the same for every leg of a matrix job, which would let the first leg to finish free the lock under the others.
+A run that finds its own holder already has the lock joins it, never waits on it or is blocked by it.
+
+A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
+Slack bot can ping that person when dev is free. A deploy waiting in its job has a `poll` entry it refreshes on every
+poll (see "Waiting in line" for the order they go in). A holder has one queue
+entry, named by a claim item (`pk = QUEUE_CLAIM#dev`, `sk = <holder_key>`, `entry_sk`, `ttl`). The claim only moves by
+a conditional write, to a new entry, so when two runs of a holder queue at once they agree on one entry; any other entry
+of that holder is a leftover and is deleted, and the one the claim names never is. An entry that is gone or dead (a
+stale `poll`) is not revived: the holder gets a new entry at the back of the queue.
+
 ## Waiting in line (`CONFIG/pr_policy`, PLAT-590)
 
 With `pr_policy` `wait`, a PR / label deploy that cannot have dev waits in its job until the deploys ahead of it are
