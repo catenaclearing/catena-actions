@@ -27,13 +27,18 @@ action.
 
 ## What it does
 
-| Situation | `report-only` (default) | `enforce` |
-|---|---|---|
-| Lock is free (or expired) | take it | take it |
-| Held by the same repo + actor + ref (e.g. two platform modules from one PR) | join it | join it |
-| Held by someone else, **PR / label deploy** | warn, deploy anyway | **fail fast** with the queue position |
-| Held by a CI deploy, **merge to main** | warn, deploy anyway | **wait** up to `wait_minutes` (30), then fail |
-| Held by a manual hold, **merge to main** | warn, deploy anyway | deploy anyway, and tell the holder |
+| Situation | `report-only` (default) | `enforce`, `pr_policy` `fail` (default) | `enforce`, `pr_policy` `wait` |
+|---|---|---|---|
+| Lock is free (or expired), nobody waiting in line | take it | take it | take it |
+| Held by the same repo + actor + ref (e.g. two platform modules from one PR) | join it | join it | join it |
+| Held by someone else, **PR / label deploy** | warn, deploy anyway | **fail fast** with the queue position | **wait in line** up to `pr_wait_minutes` (30), then fail with the queue position |
+| Lock is free but others wait in line ahead, **PR / label deploy** | (nobody waits in report-only) | **fail fast** with the queue position | **wait in line** |
+| Held by a CI deploy, or free with others ahead in line, **merge to main** | warn, deploy anyway | **wait in line** up to `wait_minutes` (30), then fail | same |
+| Held by a manual hold, **merge to main** | warn, deploy anyway | deploy anyway, and tell the holder | same, even with others in line |
+
+`enforce` and `report-only` are `CONFIG/mode`; `fail` and `wait` are `CONFIG/pr_policy` (see "Runtime mode" below).
+Both are read from the table on every run. A PR deploy under `wait` never takes over a manual hold; it waits for it like
+anything else.
 
 A merge to main is never stalled by a manual hold because production deploys wait on the dev deploy
 (`deploy-production` has `needs: deploy-development`). It does not deploy alongside the hold, though: it takes the
@@ -60,12 +65,59 @@ are the same for every leg of a matrix job, which would let the first leg to fin
 A run that finds its own holder already has the lock joins it, never waits on it or is blocked by it.
 
 A blocked PR deploy is added to the queue as a `notify` entry and keeps it after its job fails, so the
-Slack bot can ping that person when dev is free. Acquisition is first come, first served through a
-conditional write; the queue order is what the bot announces, it is not enforced by the lock. A holder has one queue
+Slack bot can ping that person when dev is free. A deploy waiting in its job has a `poll` entry it refreshes on every
+poll (see "Waiting in line" for the order they go in). A holder has one queue
 entry, named by a claim item (`pk = QUEUE_CLAIM#dev`, `sk = <holder_key>`, `entry_sk`, `ttl`). The claim only moves by
 a conditional write, to a new entry, so when two runs of a holder queue at once they agree on one entry; any other entry
 of that holder is a leftover and is deleted, and the one the claim names never is. An entry that is gone or dead (a
 stale `poll`) is not revived: the holder gets a new entry at the back of the queue.
+
+## Waiting in line (`CONFIG/pr_policy`, PLAT-590)
+
+With `pr_policy` `wait`, a PR / label deploy that cannot have dev waits in its job instead of failing, and deploys as
+soon as it is its turn. `composite/deploy-cdk` synthesizes the app and publishes its assets (Docker images, files)
+before it takes the lock, so the expensive part is already done while it waits, and getting dev only leaves the
+CloudFormation deploy.
+
+**The line is strictly first in, first out, merges to main included.** A run takes a free lock only when no other
+holder is waiting in line ahead of it (`LockStore.waitersAhead`). Ahead means an entry earlier in the queue (the
+queue is ordered by when each holder joined) that a run is waiting on right now: it carries that run's token in
+`poll_run_ids` and was refreshed in the last `120 s + poll_seconds`. So:
+
+* a newcomer does not take dev from under people waiting for it, even when it happens to look the moment dev frees;
+* a merge to main waits its turn behind PRs that were waiting before it; production waits on that dev deploy, so a
+  long line holds up production releases (see the trade-offs);
+* the one exception is a manual hold: a merge to main still takes it over at once whoever is in line, because a hold
+  can last hours and production must not wait on it (the PRs in line keep waiting, now for the merge);
+* a `notify` entry nobody is waiting on (a deploy that failed fast) holds nobody up. If that person re-runs the job and
+  it waits, it keeps the entry and so its original place;
+* a run whose runner died stops counting once its entry goes stale, and a cancelled one leaves the line in its post step;
+* a sibling run of the holder that has dev joins it, whoever is in line.
+
+The line is read, not written, so it is not part of the lock's conditional write: two runs that both see nobody ahead
+(for example a newcomer in the instant the head of the line takes the lock) still race, and the conditional write lets
+exactly one in. The other then waits behind it. If the queue cannot be read at all, the run warns once and goes by the
+lock alone, as before the line existed.
+
+A PR deploy that gives up after `pr_wait_minutes` ends as a fail-fast one does: its entry becomes `notify` (keeping its
+place), the error gives its queue position, and the Slack bot pings it when dev is free. `pr_wait_minutes` `0` makes
+`wait` behave like `fail`.
+
+### Trade-offs
+
+* **Runner minutes.** A waiting job holds its GitHub runner (and is billed for it) the whole time it waits; with
+  `pr_wait_minutes` 30 that is up to 30 minutes per waiting PR, on top of the build. `fail` costs nothing while dev is
+  busy, but the re-run builds everything again.
+* **The wait limit.** Long enough to get through a typical line, short enough that a stuck holder does not keep a pile
+  of runners busy. When it runs out the developer is where `fail` would have put them: red job, queue position, ping.
+* **It deploys what it built.** A waiting run deploys the assembly and assets it built when it started, not whatever is
+  on the branch by the time it gets dev. Pushing again starts a new run (a new holder only if the ref changes; a new
+  push to the same PR is the same holder, so its runs share the place in line).
+* **Fairness against production.** Strict FIFO means a merge to main does not jump the line, so production can wait
+  behind the PRs ahead of it (each up to its deploy time). Keep that in mind before turning `wait` on when the line is
+  usually long. Changing the rule is a change to `waitersAhead`'s callers in `src/runner.js`.
+* **The build happens even if the deploy is later blocked.** With `fail`, a blocked PR deploy has already spent its
+  build minutes before finding dev locked.
 
 ## Inputs and outputs
 
@@ -74,13 +126,14 @@ stale `poll`) is not revived: the holder gets a new entry at the back of the que
 | `table_name` | `catena-dev-lock` | |
 | `aws_region` | `AWS_REGION` / `AWS_DEFAULT_REGION`, then `us-east-1` | |
 | `ttl_minutes` | `60` | How long a lock lasts if its job dies without releasing it. Each call pushes the expiry out to at least this, never shortens it. At least 1 |
-| `wait_minutes` | `30` | How long a merge to main waits for a CI deploy. At least 0 (0 gives up straight away) |
-| `poll_seconds` | `15` | At least 1 |
+| `wait_minutes` | `30` | How long a merge to main waits in line. At least 0 (0 gives up straight away) |
+| `pr_wait_minutes` | `30` | How long a PR / label deploy waits in line when `CONFIG/pr_policy` is `wait`. At least 0 |
+| `poll_seconds` | `15` | How often a run waiting in line looks again. At least 1 |
 
 | Output | |
 |---|---|
 | `acquired` | `true` when this run holds the lock; `false` in report-only when someone else has it, when the mode is `off`, when a manual hold was overridden, and when the action failed open |
-| `blocked` | `true` only when the deploy must stop (dev is locked, mode `enforce`); `false` in every other outcome, including a failed open |
+| `blocked` | `true` only when the deploy must stop (mode `enforce`, and it failed fast or gave up waiting); `false` in every other outcome, including a failed open |
 
 `composite/deploy-cdk` runs this action with `continue-on-error: true` and stops the job itself in a later step
 when `blocked` is `true`. That way a bug in the action or an unreachable lock store lets the deploy go ahead,
@@ -97,7 +150,13 @@ item means `report-only`; an unrecognised value never enforces.
 # enforce | report-only | off
 aws dynamodb put-item --table-name catena-dev-lock --item \
   '{"pk": {"S": "CONFIG"}, "sk": {"S": "mode"}, "value": {"S": "off"}}'
+
+# What an enforced PR / label deploy does when it cannot have dev: fail (fail fast, the default) | wait (wait in line)
+aws dynamodb put-item --table-name catena-dev-lock --item \
+  '{"pk": {"S": "CONFIG"}, "sk": {"S": "pr_policy"}, "value": {"S": "wait"}}'
 ```
+
+A missing `pr_policy` item, or any other value, means `fail`. It only matters in `enforce`.
 
 ## It never fails a deploy because the lock is broken
 
@@ -128,8 +187,8 @@ and leaves it to expire on its own.
 
 ## Known limitations
 
-* **Acquisition is first come, first served** through the conditional write. Queue order is what the Slack bot
-  announces; it is not enforced by the lock.
+* **The line is checked by a read before the conditional write**, so two runs that both see nobody ahead race, and
+  whichever write lands first goes first (see "Waiting in line").
 * **A job that outlives `ttl_minutes` can be overtaken**, and a job longer than an hour cannot release the lock at
   all (its AWS session has expired), so the lock then expires on its own.
 * **A merge to main that goes ahead over a manual hold does not hold the lock itself.** If the hold ends while that

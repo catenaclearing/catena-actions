@@ -3,6 +3,7 @@ import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteComma
 
 export const LOCK_KEY = Object.freeze({ pk: "LOCK#dev", sk: "CURRENT" });
 export const CONFIG_KEY = Object.freeze({ pk: "CONFIG", sk: "mode" });
+export const PR_POLICY_KEY = Object.freeze({ pk: "CONFIG", sk: "pr_policy" });
 export const QUEUE_PK = "QUEUE#dev";
 export const QUEUE_CLAIM_PK = "QUEUE_CLAIM#dev"; // one item per holder, naming its single queue entry
 export const QUEUE_ENTRY_TTL_SECONDS = 4 * 60 * 60; // garbage collection only; entries are also removed explicitly
@@ -64,6 +65,17 @@ function isLive(entry, now) {
 }
 
 /**
+ * Whether a run is waiting in line in its job for this entry right now: it has a waiting run's token and was refreshed
+ * recently. A `notify` entry of a deploy that failed fast has no token, so it holds nobody up; if that person re-runs the
+ * job and it waits, it keeps the entry and so its place.
+ */
+function isWaiting(entry, now) {
+  const runIds = entry.poll_run_ids;
+  if (!(runIds instanceof Set) || runIds.size === 0) return false;
+  return now - Number(entry.heartbeat_at ?? 0) <= POLL_ENTRY_STALE_SECONDS + Number(entry.poll_seconds ?? 0);
+}
+
+/**
  * All DynamoDB access for the dev lock.
  *
  * Lock expiry is decided here, in the conditions of the writes (`expires_at < now`), never by DynamoDB TTL:
@@ -86,7 +98,16 @@ export class LockStore {
 
   /** Return the runtime mode string, or null when CONFIG/mode has never been written. */
   async getMode() {
-    const { Item } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: CONFIG_KEY, ConsistentRead: true }));
+    return this.#getConfig(CONFIG_KEY);
+  }
+
+  /** Return the PR policy string, or null when CONFIG/pr_policy has never been written. */
+  async getPrPolicy() {
+    return this.#getConfig(PR_POLICY_KEY);
+  }
+
+  async #getConfig(key) {
+    const { Item } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: key, ConsistentRead: true }));
     return Item?.value ?? null;
   }
 
@@ -371,6 +392,29 @@ export class LockStore {
   async #liveQueue() {
     const now = this.now();
     return (await this.#queue()).filter((entry) => isLive(entry, now));
+  }
+
+  /**
+   * Count the other holders waiting in line ahead of this one: holders with a waiting run (see isWaiting) whose entry
+   * comes before this holder's live entry, or every one of them when this holder has no live entry yet.
+   *
+   * This is what makes the lock first in, first out: only a run with nobody ahead of it tries to take a free lock. It is
+   * a read, not part of the conditional write, so two runs that both see nobody ahead (a new arrival in the moment the
+   * head of the line takes the lock, say) still race, and the conditional write picks one.
+   */
+  async waitersAhead(settings) {
+    const now = this.now();
+    const live = await this.#liveQueue();
+    const { Item: claim } = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_CLAIM_PK, sk: settings.holderKey }, ConsistentRead: true }),
+    );
+    const mine = live.some((entry) => entry.sk === claim?.entry_sk && entry.holder_key === settings.holderKey) ? claim.entry_sk : null;
+    const ahead = new Set();
+    for (const entry of live) {
+      if (mine !== null && entry.sk >= mine) break;
+      if (entry.holder_key !== settings.holderKey && isWaiting(entry, now)) ahead.add(entry.holder_key);
+    }
+    return ahead.size;
   }
 
   /**
@@ -665,10 +709,34 @@ export class LockStore {
     throw new Error("this deploy's poll queue share kept changing while trying to remove it");
   }
 
+  async #dropWaitingRun(holderKey, sk, runToken) {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_PK, sk },
+          UpdateExpression: "DELETE poll_run_ids :run",
+          ConditionExpression: "holder_key = :holder",
+          ExpressionAttributeValues: { ":run": new Set([runToken]), ":holder": holderKey },
+        }),
+      );
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error; // the entry is gone already
+    }
+  }
+
   /** Remove a holder's queue entries of the given kinds, and its claim when that named one of them. */
   async removeQueueEntries(holderKey, kinds = ["notify", "poll"], runToken = null) {
     for (const entry of await this.#queue()) {
-      if (entry.holder_key !== holderKey || !kinds.includes(entry.kind)) continue;
+      if (entry.holder_key !== holderKey) continue;
+      if (!kinds.includes(entry.kind)) {
+        // A run that waited on its holder's `notify` entry left its token there (a `poll` write keeps the kind): take
+        // the token out, so the entry stops counting as waiting, but keep the entry and its ping.
+        if (runToken !== null && entry.kind === "notify" && entry.poll_run_ids instanceof Set && entry.poll_run_ids.has(runToken)) {
+          await this.#dropWaitingRun(holderKey, entry.sk, runToken);
+        }
+        continue;
+      }
       if (runToken !== null && entry.kind === "poll") {
         await this.#removePollShare(holderKey, entry, runToken);
         continue;

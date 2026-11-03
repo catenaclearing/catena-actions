@@ -27,8 +27,15 @@ inputs:
     required: false
     default: "30"
 
+  pr_wait_minutes:
+    description: >-
+      How long a PR / label deploy waits in line before giving up, when the table's CONFIG/pr_policy is "wait"
+      (with the default "fail" it never waits). At least 0
+    required: false
+    default: "30"
+
   poll_seconds:
-    description: How often a waiting merge to main checks the lock, in seconds. At least 1
+    description: How often a deploy waiting in line checks the lock, in seconds. At least 1
     required: false
     default: "15"
 
@@ -40,7 +47,8 @@ outputs:
 
   blocked:
     description: >-
-      'true' only when the deploy must stop (dev is locked and the mode is enforce). The caller runs this step with
+      'true' only when the deploy must stop (mode enforce, and dev is locked or others are in line ahead, and this
+      run fails fast or gave up waiting). The caller runs this step with
       continue-on-error, so a bug in the action or an unreachable lock store does not stop a deploy, and fails the job
       itself when this is 'true'.
 

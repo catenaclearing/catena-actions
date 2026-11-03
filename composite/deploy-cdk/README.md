@@ -66,3 +66,18 @@ The flag is only passed when the value isn't `1`, so the default leaves the depl
 Values above 1 need CDK CLI 2.1109.0 or later (the flag's first release), which the default `cdk_version:
 latest` always is; if you pin an older `cdk_version`, leave this input at its default. Standard GitHub-hosted runners have 2 vCPUs, and most of an image
 build is waiting on downloads, cache exports and pushes, so values around 3–4 are a reasonable start.
+
+## The dev lock, and building before it
+
+In the development account, deploys of the repos in `dev_lock_repos` take the global dev lock
+([actions/dev-lock](../../actions/dev-lock/README.md)) before deploying. Those deploys first synthesize the app and
+publish the stack's assets (`cdk synth`, then `cdk publish-assets`, which only writes to the CDK bootstrap bucket and
+repositories, never to the stack), then take the lock, run the ownership guard, and deploy the assembly they built
+(`cdk deploy --app <assembly>`, with the same `--force`, `catena:managed-by` tag, `exclusively` and
+`asset_build_concurrency` as always). A deploy that has to wait for dev therefore waits with its build done.
+
+`cdk publish-assets` needs CDK CLI 2.1116.0 or later and is still marked unstable by the CDK
+(`--unstable=publish-assets`). With an older pinned `cdk_version`, or if building before the lock fails for any reason,
+the step only warns and the deploy synthesizes and builds after taking the lock, exactly as before. Production,
+management and every repo outside `dev_lock_repos` skip both the build-first step and the lock, and run the same single
+`cdk deploy` they always did.

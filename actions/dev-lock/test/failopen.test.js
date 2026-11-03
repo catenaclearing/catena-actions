@@ -128,7 +128,9 @@ describe("what is not swallowed", () => {
 
     assert.equal(ctx.out.outputs.blocked, "true");
     assert.equal(ctx.out.outputs.acquired, "false");
-    assert.match(ctx.out.messages.find(([level]) => level === "warning")[1], /ThrottlingException.*queue position unknown/);
+    const warnings = ctx.out.messages.filter(([level]) => level === "warning").map(([, message]) => message);
+    assert.match(warnings[0], /could not read the waiting line \(ThrottlingException.*going by the lock alone/);
+    assert.ok(warnings.some((message) => /ThrottlingException.*queue position unknown/.test(message)));
     assert.match(ctx.out.messages.find(([level]) => level === "error")[1], /in the queue \(position unknown\)/);
   });
 

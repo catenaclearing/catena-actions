@@ -218,6 +218,7 @@ def test_the_lock_is_taken_after_credentials_and_before_anything_is_deployed():
     order = [
         position("Configure AWS credentials"),
         position("dev-lock-gate"),
+        position("prebuild"),
         position("dev-lock"),
         position("dev-lock-blocked"),
         position("Guard against overwriting another service's stack"),
@@ -289,3 +290,158 @@ def test_existing_inputs_are_unchanged():
     for name in ("role_to_assume", "aws_region", "stack_name", "machine_user_pat"):
         assert ACTION["inputs"][name]["required"] is True
     assert ACTION["inputs"]["exclusively"]["default"] == "false"
+
+
+# --- building before the lock (PLAT-590) ----------------------------------------------------------------------------
+
+PREBUILD = step("prebuild")
+DEPLOY = step("CDK Deploy")
+
+
+def test_only_deploys_that_take_the_lock_build_before_it_and_the_build_cannot_fail_the_job():
+    """Production, management and repos outside dev_lock_repos skip it, and run the single cdk deploy they always did."""
+    assert PREBUILD["if"] == step("dev-lock")["if"] == "steps.dev-lock-gate.outputs.is_dev_lock == 'true'"
+    assert PREBUILD["continue-on-error"] is True
+    assert PREBUILD["shell"] == "bash"
+
+
+def test_the_build_gets_what_the_deploy_gets():
+    for name in (
+        "GITHUB_TOKEN",
+        "DOCKER_BUILDKIT",
+        "BUILDX_BUILDER",
+        "DIRECTORY",
+        "CDK_VERSION",
+        "STACK_NAME",
+        "EXCLUSIVELY_FLAG",
+        "ASSET_BUILD_CONCURRENCY",
+    ):
+        assert PREBUILD["env"][name] == DEPLOY["env"][name], name
+
+
+def test_the_deploy_reads_the_assembly_only_from_the_build_step():
+    assert DEPLOY["env"]["PREBUILT_ASSEMBLY"] == "${{ steps.prebuild.outputs.assembly }}"
+    assert "if" not in DEPLOY  # every deploy still deploys
+
+
+@pytest.fixture(name="fake_npx")
+def fake_npx_fixture(tmp_path: Path) -> Path:
+    """A stand-in npx: logs each call's arguments on one line, prints FAKE_CDK_VERSION for --version, and fails the
+    sub-command named in FAKE_NPX_FAIL."""
+    bin_dir = tmp_path / "npx-bin"
+    bin_dir.mkdir()
+    npx = bin_dir / "npx"
+    npx.write_text(
+        "#!/bin/bash\n"
+        'echo "$*" >> "$NPX_LOG"\n'
+        '[ -n "$FAKE_NPX_FAIL" ] && [ "$3" = "$FAKE_NPX_FAIL" ] && { echo "failed" >&2; exit 1; }\n'
+        '[ "$3" = "--version" ] && { echo "$FAKE_CDK_VERSION (build abc1234)"; exit 0; }\n'
+        "exit 0\n"
+    )
+    npx.chmod(0o755)
+    return bin_dir
+
+
+def run_composite_step(tmp_path: Path, fake_npx: Path, script: str, **overrides: str) -> tuple[int, list[str], str, str]:
+    """Run a step's script the way GitHub does; returns (exit code, npx calls, what it wrote to GITHUB_OUTPUT, log)."""
+    project = tmp_path / "project"
+    (project / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+    (project / ".venv" / "bin" / "activate").write_text("")
+    log = tmp_path / "npx.log"
+    log.unlink(missing_ok=True)
+    output = tmp_path / "github_output"
+    output.unlink(missing_ok=True)
+    env = {
+        "PATH": f"{fake_npx}{os.pathsep}{os.environ['PATH']}",
+        "NPX_LOG": str(log),
+        "GITHUB_OUTPUT": str(output),
+        "RUNNER_TEMP": str(tmp_path / "runner-temp"),
+        "FAKE_CDK_VERSION": "2.1147.0",
+        "DIRECTORY": str(project),
+        "CDK_VERSION": "latest",
+        "STACK_NAME": "Example-Development",
+        "THIS_REPO": "catenaclearing/example",
+        "EXCLUSIVELY_FLAG": "false",
+        "ASSET_BUILD_CONCURRENCY": "1",
+        "PREBUILT_ASSEMBLY": "",
+        **overrides,
+    }
+    # GitHub runs composite `shell: bash` steps as `bash --noprofile --norc -eo pipefail {0}`.
+    result = subprocess.run(  # noqa: S603 - runs this repo's own action script
+        ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    written = output.read_text() if output.exists() else ""
+    return result.returncode, calls, written, result.stdout + result.stderr
+
+
+def test_the_build_synthesizes_then_publishes_only_this_stacks_assets(tmp_path, fake_npx):
+    code, calls, written, _ = run_composite_step(tmp_path, fake_npx, PREBUILD["run"])
+    assembly = f"{tmp_path}/runner-temp/deploy-cdk/Example-Development.out"
+    assert code == 0
+    assert calls == [
+        "-y aws-cdk@latest --version",
+        f"-y aws-cdk@2.1147.0 synth Example-Development --quiet --output {assembly}",
+        f"-y aws-cdk@2.1147.0 publish-assets Example-Development --app {assembly} --unstable=publish-assets --concurrency 1",
+    ]
+    assert written == f"assembly={assembly}\n"
+
+
+def test_the_build_honours_exclusively_and_the_build_concurrency(tmp_path, fake_npx):
+    code, calls, _, _ = run_composite_step(tmp_path, fake_npx, PREBUILD["run"], EXCLUSIVELY_FLAG="true", ASSET_BUILD_CONCURRENCY="4")
+    assert code == 0
+    assert " synth Example-Development --exclusively --quiet " in calls[1]
+    assert " publish-assets Example-Development --exclusively --app " in calls[2]
+    assert calls[2].endswith("--concurrency 4")
+
+
+@pytest.mark.parametrize("version", ["2.1115.0", "2.1109.0", "2.150.0"])
+def test_a_cdk_cli_without_publish_assets_builds_after_the_lock_as_before(tmp_path, fake_npx, version):
+    code, calls, written, log = run_composite_step(tmp_path, fake_npx, PREBUILD["run"], FAKE_CDK_VERSION=version)
+    assert code == 0
+    assert len(calls) == 1  # only --version
+    assert written == ""
+    assert "no publish-assets" in log
+
+
+@pytest.mark.parametrize("failing", ["synth", "publish-assets", "--version"])
+def test_a_failed_build_hands_nothing_on(tmp_path, fake_npx, failing):
+    """The step is continue-on-error; without an assembly the deploy synthesizes and builds itself, as it always did."""
+    code, _, written, _ = run_composite_step(tmp_path, fake_npx, PREBUILD["run"], FAKE_NPX_FAIL=failing)
+    assert code != 0
+    assert written == ""
+
+
+@pytest.mark.parametrize("value", ["0", "four", "4 --force", ""])
+def test_a_bad_build_concurrency_hands_nothing_on_and_never_builds(tmp_path, fake_npx, value):
+    code, calls, written, _ = run_composite_step(tmp_path, fake_npx, PREBUILD["run"], ASSET_BUILD_CONCURRENCY=value)
+    assert code != 0
+    assert len(calls) == 1
+    assert written == ""
+
+
+def test_the_deploy_deploys_the_prebuilt_assembly(tmp_path, fake_npx):
+    code, calls, _, _ = run_composite_step(
+        tmp_path,
+        fake_npx,
+        DEPLOY["run"],
+        PREBUILT_ASSEMBLY=f"{tmp_path}/Example-Development.out",
+        EXCLUSIVELY_FLAG="true",
+        ASSET_BUILD_CONCURRENCY="4",
+    )
+    assert code == 0
+    assert calls == [
+        f"-y aws-cdk@latest deploy Example-Development --app {tmp_path}/Example-Development.out --force "
+        "--tags catena:managed-by=catenaclearing/example --exclusively --asset-build-concurrency 4"
+    ]
+
+
+def test_without_an_assembly_the_deploy_command_is_exactly_what_it_was(tmp_path, fake_npx):
+    """Production, repos outside dev_lock_repos, an old CDK CLI and a failed build all get this (a skipped step's output is '')."""
+    code, calls, _, _ = run_composite_step(tmp_path, fake_npx, DEPLOY["run"])
+    assert code == 0
+    assert calls == ["-y aws-cdk@latest deploy Example-Development --force --tags catena:managed-by=catenaclearing/example"]

@@ -50,5 +50,5 @@ def test_nothing_deploy_cdk_references_is_a_docker_action():
 
 
 def test_the_inputs_and_outputs_the_composite_relies_on_exist():
-    assert set(ACTION["inputs"]) == {"table_name", "aws_region", "ttl_minutes", "wait_minutes", "poll_seconds"}
+    assert set(ACTION["inputs"]) == {"table_name", "aws_region", "ttl_minutes", "wait_minutes", "pr_wait_minutes", "poll_seconds"}
     assert set(ACTION["outputs"]) == {"acquired", "blocked"}

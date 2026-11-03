@@ -1,7 +1,7 @@
 import { RUN_TOKEN_STATE, Settings } from "./config.js";
 import { createStore } from "./client.js";
 import { Output } from "./github.js";
-import { Decision, Mode, decide, parseMode } from "./policy.js";
+import { Decision, Mode, decide, parseMode, parsePrPolicy } from "./policy.js";
 
 const MAX_RACE_RETRIES = 5;
 const AWS_STATE = Object.freeze({
@@ -29,10 +29,6 @@ function timing(lock, now) {
   const minutes = Math.max(0, Math.floor((lock.expiresAt - now) / 60));
   const expires = minutes ? `about ${minutes} min` : "under a minute";
   return `since ${since}, expires in ${expires}`;
-}
-
-async function tryTake(settings, store) {
-  return (await store.putIfFree(settings)) || (await store.joinIfMine(settings));
 }
 
 async function tookLock(settings, store, out, mode) {
@@ -63,10 +59,34 @@ async function queuePosition(write, out) {
   }
 }
 
-/** Act on a live lock held by someone else. Returns the exit code, null to keep waiting, LOOK_AGAIN or PREEMPTED. */
-async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) {
-  const decision = decide(mode, lock.holderType, { isMainPush: settings.isMainPush });
-  const holder = `${holderLabel(lock)}, ${timing(lock, clock.now())}`;
+const minutes = (seconds) => Math.floor(seconds / 60);
+
+/**
+ * How many other deploys wait in line ahead of this run. The line is bookkeeping like the rest of the queue: when it
+ * cannot be read this warns and counts nobody ahead, so the run acts on the lock alone, as it did before the line.
+ */
+async function waitersAhead(settings, store, out, line) {
+  try {
+    return await store.waitersAhead(settings);
+  } catch (error) {
+    if (line.warned) return 0; // once per run, not once per poll
+    line.warned = true;
+    out.warning(`dev-lock could not read the waiting line (${error?.name ?? "Error"}: ${error?.message ?? error}); going by the lock alone.`);
+    return 0;
+  }
+}
+
+/**
+ * Act on dev being unavailable to this run: `lock` is a live lock held by someone else, or null when dev is free but
+ * `ahead` other deploys are waiting in line before this one. Returns the exit code, null to keep waiting, LOOK_AGAIN or
+ * PREEMPTED.
+ */
+async function cannotTakeNow(settings, store, clock, out, policy, lock, ahead, wait) {
+  const decision = decide(policy.mode, lock?.holderType ?? null, { isMainPush: settings.isMainPush, prPolicy: policy.prPolicy });
+  const holder = lock ? `${holderLabel(lock)}, ${timing(lock, clock.now())}` : null;
+  const situation = lock
+    ? `Dev is locked by ${holder}`
+    : `Dev is free, but ${ahead} deploy${ahead === 1 ? " is" : "s are"} waiting in line ahead of this one`;
 
   if (decision === Decision.CONTINUE) {
     out.warning(`Dev is held by ${holder}. dev-lock is in report-only mode, so this deploy would have been blocked; continuing.`);
@@ -99,26 +119,47 @@ async function heldBySomeoneElse(settings, store, clock, out, mode, lock, wait) 
   if (decision === Decision.BLOCK) {
     const position = await queuePosition(() => store.enqueue(settings, "notify"), out);
     out.error(
-      `Dev is locked by ${holder}. You are ${position === null ? "in the queue (position unknown)" : `#${position} in the queue`}; the #dev-deploys bot will ping you when it is your turn. ` +
+      `${situation}. You are ${position === null ? "in the queue (position unknown)" : `#${position} in the queue`}; the #dev-deploys bot will ping you when it is your turn. ` +
         "Re-run this job once dev is free.",
     );
     return 1;
   }
 
-  // Decision.WAIT: a merge to main waits for the CI deploy ahead of it. A failed queue write does not stop the wait.
+  // Decision.WAIT: a merge to main, or a PR deploy under pr_policy wait, waits in line until dev is free and nobody is
+  // ahead of it. The entry is refreshed on every poll, which is what keeps it counting. A failed queue write does not
+  // stop the wait.
   const position = await queuePosition(() => store.enqueue(settings, "poll"), out);
+  const limit = settings.waitLimitSeconds;
   if (wait.since === null) {
     wait.since = clock.now();
-    out.notice(`Dev is locked by ${holder}. Waiting up to ${Math.floor(settings.waitSeconds / 60)} min (queue position ${position === null ? "unknown" : `#${position}`}).`);
+    out.notice(`${situation}. Waiting up to ${minutes(limit)} min (queue position ${position === null ? "unknown" : `#${position}`}).`);
   }
-  if (clock.now() - wait.since < settings.waitSeconds) return null;
+  if (clock.now() - wait.since < limit) return null;
+
+  if (!settings.isMainPush) {
+    // A PR deploy that gave up ends as a blocked one does: its entry becomes `notify` (keeping its place), so the bot
+    // pings the deployer when it is their turn. The kind is written before this run's token is taken out, so the entry
+    // never looks abandoned in between.
+    const final = await queuePosition(() => store.enqueue(settings, "notify"), out);
+    try {
+      await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
+    } catch {
+      out.warning("dev-lock could not take this job out of the waiting line; it stops counting once it is no longer refreshed.");
+    }
+    out.error(
+      `Gave up after waiting ${minutes(limit)} min: ${situation.charAt(0).toLowerCase()}${situation.slice(1)}. ` +
+        `You are ${final === null ? "in the queue (position unknown)" : `#${final} in the queue`}; the #dev-deploys bot will ping you when it is your turn. ` +
+        "Re-run this job once dev is free.",
+    );
+    return 1;
+  }
   try {
     await store.removeQueueEntries(settings.holderKey, ["poll"], settings.runToken);
   } catch {
     out.warning("dev-lock could not remove this job's queue entry; it stops counting once it is no longer refreshed.");
   }
   out.error(
-    `Gave up after ${Math.floor(settings.waitSeconds / 60)} min: dev is still locked by ${holder}. ` +
+    `Gave up after ${minutes(limit)} min: ${situation.charAt(0).toLowerCase()}${situation.slice(1)}. ` +
       "Production waits on this job, so re-run it once dev is free.",
   );
   return 1;
@@ -135,30 +176,39 @@ export async function acquire(settings, store, clock, out) {
     out.setOutput("blocked", "false");
     return 0;
   }
+  // Only read when enforcing: in report-only nothing waits or is blocked, whatever it says.
+  const policy = { mode, prPolicy: mode === Mode.ENFORCE ? parsePrPolicy(await store.getPrPolicy()) : null };
 
   const wait = { since: null };
+  const line = { warned: false };
   let races = 0;
   const lostRace = () => {
     races += 1;
     if (races > MAX_RACE_RETRIES) throw new Error("the dev lock kept changing while trying to take it");
   };
   for (;;) {
-    if (await tryTake(settings, store)) return tookLock(settings, store, out, mode);
+    // First in, first out (enforce only): a free lock is only taken by a run with nobody waiting in line ahead of it.
+    // Joining our own holder's lock never waits in line: it is already this holder's turn.
+    const ahead = mode === Mode.ENFORCE ? await waitersAhead(settings, store, out, line) : 0;
+    if ((ahead === 0 && (await store.putIfFree(settings))) || (await store.joinIfMine(settings))) {
+      return tookLock(settings, store, out, mode);
+    }
 
     const lock = await store.getLock();
-    if (lock === null || lock.isExpired(store.now())) {
+    const free = lock === null || lock.isExpired(store.now());
+    if (free && ahead === 0) {
       // Freed or expired between our write and our read: someone else may be racing us, so just try again.
       lostRace();
       continue;
     }
-    if (lock.holderKey === settings.holderKey) {
+    if (!free && lock.holderKey === settings.holderKey) {
       // Our own holder took the lock after our join failed (a sibling run got in when the previous holder released).
       // It is ours to join, not someone else's to wait on or be blocked by.
       lostRace();
       continue;
     }
 
-    const exitCode = await heldBySomeoneElse(settings, store, clock, out, mode, lock, wait);
+    const exitCode = await cannotTakeNow(settings, store, clock, out, policy, free ? null : lock, ahead, wait);
     if (exitCode === PREEMPTED) return 0;
     if (exitCode === LOOK_AGAIN) {
       lostRace();
@@ -169,8 +219,11 @@ export async function acquire(settings, store, clock, out) {
       out.setOutput("blocked", exitCode ? "true" : "false");
       return exitCode;
     }
-    const remaining = Math.max(0, settings.waitSeconds - (clock.now() - wait.since));
+    const remaining = Math.max(0, settings.waitLimitSeconds - (clock.now() - wait.since));
     await clock.sleep(Math.min(settings.pollSeconds, remaining));
+    // The limit is on races in a row: over a long wait in a busy line, losing a few now and then is normal, and giving
+    // up on them fails open (this run would deploy alongside the holder).
+    races = 0;
   }
 }
 
