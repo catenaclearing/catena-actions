@@ -249,7 +249,7 @@ def test_the_lock_step_runs_only_when_the_gate_says_so_and_cannot_fail_the_job_b
 
 def test_the_lock_action_is_pinned_to_a_released_commit_that_contains_it():
     """Job setup must not depend on the v0 release workflow racing the first deploy after merge."""
-    assert step("dev-lock")["uses"] == "catenaclearing/catena-actions/actions/dev-lock@6aec297a1f3e38103322acbf973c355d8a80bc09"
+    assert step("dev-lock")["uses"] == "catenaclearing/catena-actions/actions/dev-lock@4b4c87221e8243cc1a57f4de5cca10f4968a317b"
 
 
 def test_a_deliberate_block_stops_the_deploy_and_nothing_else_does():
