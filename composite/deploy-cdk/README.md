@@ -74,8 +74,13 @@ In the development account, deploys of the repos in `dev_lock_repos` take the gl
 the stack (the same guard that runs again right before the deploy), then synthesize the app and publish the stack's
 assets (`cdk synth`, then `cdk publish-assets`, which only writes to the CDK bootstrap bucket and
 repositories, never to the stack), then take the lock, run the ownership guard, and deploy the assembly they built
-(`cdk deploy --app <assembly>`, with the same `--force`, `catena:managed-by` tag, `exclusively` and
-`asset_build_concurrency` as always). A deploy that has to wait for dev therefore waits with its build done.
+(`cdk deploy --app <assembly>`, with the same `catena:managed-by` tag, `exclusively` and `asset_build_concurrency`
+as always). A deploy that has to wait for dev therefore waits with its build done.
+
+That deploy leaves out `--force`: with it, `cdk deploy` rebuilds and re-pushes every asset instead of skipping the ones
+already published. CDK still deploys whenever the template, tags or parameters differ (so a stack without the
+`catena:managed-by` tag still gets it); it skips only a deploy that would change nothing. Every other deploy keeps
+`--force`, as before.
 
 `cdk publish-assets` needs CDK CLI 2.1116.0 or later and is still marked unstable by the CDK
 (`--unstable=publish-assets`). With an older pinned `cdk_version`, or if building before the lock fails for any reason,

@@ -425,7 +425,11 @@ def test_a_bad_build_concurrency_hands_nothing_on_and_never_builds(tmp_path, fak
     assert written == ""
 
 
-def test_the_deploy_deploys_the_prebuilt_assembly(tmp_path, fake_npx):
+def test_the_deploy_deploys_the_prebuilt_assembly_without_force(tmp_path, fake_npx):
+    """`cdk deploy --force` rebuilds and re-pushes every asset; without it CDK skips the ones published before the lock.
+
+    It still deploys whenever the template, tags or parameters differ, so the catena:managed-by tag is still stamped.
+    """
     code, calls, _, _ = run_composite_step(
         tmp_path,
         fake_npx,
@@ -436,7 +440,7 @@ def test_the_deploy_deploys_the_prebuilt_assembly(tmp_path, fake_npx):
     )
     assert code == 0
     assert calls == [
-        f"-y aws-cdk@latest deploy Example-Development --app {tmp_path}/Example-Development.out --force "
+        f"-y aws-cdk@latest deploy Example-Development --app {tmp_path}/Example-Development.out "
         "--tags catena:managed-by=catenaclearing/example --exclusively --asset-build-concurrency 4"
     ]
 
@@ -532,3 +536,27 @@ def test_the_guard_fails_closed_when_it_cannot_tell(tmp_path, fake_cfn):
     code, output = run_guard(tmp_path, fake_cfn, FAKE_ERROR="An error occurred (AccessDenied)")
     assert code == 1
     assert "refusing to deploy blindly" in output
+
+
+@pytest.mark.parametrize(
+    ("exclusively", "concurrency", "tail"),
+    [
+        ("false", "1", []),
+        ("true", "4", ["--exclusively", "--asset-build-concurrency", "4"]),
+    ],
+)
+def test_only_the_prebuilt_path_leaves_force_out(tmp_path, fake_npx, exclusively, concurrency, tail):
+    """Production, repos outside dev_lock_repos, an old CDK CLI and a failed build all deploy with --force, as before."""
+    tags = ["--tags", "catena:managed-by=catenaclearing/example"]
+    assembly = f"{tmp_path}/Example-Development.out"
+    for prebuilt, middle in (("", ["--force"]), (assembly, ["--app", assembly])):
+        code, calls, _, _ = run_composite_step(
+            tmp_path,
+            fake_npx,
+            DEPLOY["run"],
+            PREBUILT_ASSEMBLY=prebuilt,
+            EXCLUSIVELY_FLAG=exclusively,
+            ASSET_BUILD_CONCURRENCY=concurrency,
+        )
+        assert code == 0
+        assert calls == [" ".join(["-y", "aws-cdk@latest", "deploy", "Example-Development", *middle, *tags, *tail])]

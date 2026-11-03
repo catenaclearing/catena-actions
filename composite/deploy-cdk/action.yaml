@@ -248,14 +248,19 @@ runs:
           fi
           ASSET_BUILD_CONCURRENCY_ARGS=(--asset-build-concurrency "$ASSET_BUILD_CONCURRENCY")
         fi
-        # Deploy the assembly built before the lock when there is one: its assets are already published, so CDK skips
-        # them, and the deploy is the code this job built, however long it waited. Otherwise synthesize and build here.
+        # Deploy the assembly built before the lock when there is one, so the deploy is the code this job built, however
+        # long it waited. Its assets are already published, and CDK skips published assets only without --force (with it,
+        # `cdk deploy` rebuilds and re-pushes every one), so that path leaves --force out. CDK still deploys whenever the
+        # template, tags or parameters differ, so a stack without the catena:managed-by tag still gets it; only a deploy
+        # that would change nothing is skipped. Otherwise synthesize and build here, with --force as always.
         APP_ARGS=()
+        FORCE_ARGS=(--force)
         if [ -n "$PREBUILT_ASSEMBLY" ]; then
           APP_ARGS=(--app "$PREBUILT_ASSEMBLY")
+          FORCE_ARGS=()
         fi
         npx -y "aws-cdk@$CDK_VERSION" deploy "$STACK_NAME" "${APP_ARGS[@]}" \
-          --force --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY "${ASSET_BUILD_CONCURRENCY_ARGS[@]}"
+          "${FORCE_ARGS[@]}" --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY "${ASSET_BUILD_CONCURRENCY_ARGS[@]}"
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
