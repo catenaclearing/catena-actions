@@ -21,12 +21,41 @@ describe("parseMode", () => {
 
 describe("decide", () => {
   for (const holderType of ["ci", "manual"]) {
-    for (const isMainPush of [true, false]) {
-      it(`report-only never blocks (${holderType}, main push: ${isMainPush})`, () => {
-        assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush }), Decision.CONTINUE);
-      });
+    it(`report-only never blocks a PR deploy (${holderType})`, () => {
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: false }), Decision.CONTINUE);
+    });
+  }
+
+  // Every combination: mode x pr_policy x merge-or-PR x who is in the way (a CI deploy, a manual hold, or nobody holds
+  // dev but others are ahead in line).
+  const expected = {
+    "report-only": {
+      fail: { merge: { ci: "CONTINUE", manual: "CONTINUE", line: "CONTINUE" }, pr: { ci: "CONTINUE", manual: "CONTINUE", line: "CONTINUE" } },
+      wait: { merge: { ci: "CONTINUE", manual: "CONTINUE", line: "CONTINUE" }, pr: { ci: "WAIT", manual: "WAIT", line: "WAIT" } },
+    },
+    enforce: {
+      fail: { merge: { ci: "WAIT", manual: "PREEMPT", line: "WAIT" }, pr: { ci: "BLOCK", manual: "BLOCK", line: "BLOCK" } },
+      wait: { merge: { ci: "WAIT", manual: "PREEMPT", line: "WAIT" }, pr: { ci: "WAIT", manual: "WAIT", line: "WAIT" } },
+    },
+  };
+  for (const [mode, byPolicy] of Object.entries(expected)) {
+    for (const [prPolicy, byKind] of Object.entries(byPolicy)) {
+      for (const [kind, byHolder] of Object.entries(byKind)) {
+        for (const [holder, decision] of Object.entries(byHolder)) {
+          it(`${mode}, pr_policy ${prPolicy}, ${kind}, ${holder === "line" ? "free with others ahead" : `held by ${holder}`}: ${decision}`, () => {
+            const holderType = holder === "line" ? null : holder;
+            assert.equal(decide(mode, holderType, { isMainPush: kind === "merge", prPolicy }), Decision[decision]);
+          });
+        }
+      }
     }
   }
+
+  it("report-only stays observational for a merge to main: it never waits", () => {
+    for (const holderType of ["ci", "manual", null]) {
+      assert.equal(decide(Mode.REPORT_ONLY, holderType, { isMainPush: true }), Decision.CONTINUE);
+    }
+  });
 
   it("a PR deploy fails fast whoever holds the lock", () => {
     assert.equal(decide(Mode.ENFORCE, "ci", { isMainPush: false }), Decision.BLOCK);

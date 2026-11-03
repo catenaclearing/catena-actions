@@ -56,7 +56,15 @@ describe("Settings", () => {
     assert.equal(settings.tableName, "catena-dev-lock");
     assert.equal(settings.ttlSeconds, 60 * 60);
     assert.equal(settings.waitSeconds, 30 * 60);
+    assert.equal(settings.prWaitSeconds, 30 * 60);
     assert.equal(settings.pollSeconds, 15);
+  });
+
+  it("a merge to main waits up to wait_minutes, every other deploy up to pr_wait_minutes", () => {
+    const inputs = { INPUT_WAIT_MINUTES: "7", INPUT_PR_WAIT_MINUTES: "3" };
+    assert.equal(Settings.fromEnv(mainPushEnv(inputs)).waitLimitSeconds, 7 * 60);
+    assert.equal(Settings.fromEnv(githubEnv(inputs)).waitLimitSeconds, 3 * 60);
+    assert.equal(Settings.fromEnv(githubEnv({ ...inputs, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/main" })).waitLimitSeconds, 3 * 60);
   });
 
   it("inputs override the defaults", () => {
@@ -83,6 +91,8 @@ describe("Settings", () => {
     ["POLL_SECONDS", "0", /poll_seconds must be a whole number of at least 1/],
     ["POLL_SECONDS", "-1", /poll_seconds must be a whole number of at least 1/],
     ["WAIT_MINUTES", "-1", /wait_minutes must be a whole number of at least 0/],
+    ["PR_WAIT_MINUTES", "-1", /pr_wait_minutes must be a whole number of at least 0/],
+    ["PR_WAIT_MINUTES", "soon", /pr_wait_minutes must be a whole number/],
     ["TTL_MINUTES", "99999999999999999999", /ttl_minutes must be a whole number/],
   ];
   for (const [inputName, value, error] of outOfRange) {

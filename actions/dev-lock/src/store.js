@@ -3,6 +3,7 @@ import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteComma
 
 export const LOCK_KEY = Object.freeze({ pk: "LOCK#dev", sk: "CURRENT" });
 export const CONFIG_KEY = Object.freeze({ pk: "CONFIG", sk: "mode" });
+export const PR_POLICY_KEY = Object.freeze({ pk: "CONFIG", sk: "pr_policy" });
 export const QUEUE_PK = "QUEUE#dev";
 export const QUEUE_CLAIM_PK = "QUEUE_CLAIM#dev"; // one item per holder, naming its single queue entry
 export const QUEUE_ENTRY_TTL_SECONDS = 4 * 60 * 60; // garbage collection only; entries are also removed explicitly
@@ -64,6 +65,34 @@ function isLive(entry, now) {
 }
 
 /**
+ * Whether a run is waiting in line in its job for this entry right now: it has a waiting run's token and was refreshed
+ * recently. A `notify` entry of a deploy that failed fast has no token, so it holds nobody up; if that person re-runs the
+ * job and it waits, it keeps the entry and so its place.
+ */
+function isWaiting(entry, now) {
+  const runIds = entry.poll_run_ids;
+  if (!(runIds instanceof Set) || runIds.size === 0) return false;
+  return now - Number(entry.heartbeat_at ?? 0) <= POLL_ENTRY_STALE_SECONDS + Number(entry.poll_seconds ?? 0);
+}
+
+/**
+ * Whether a waiting entry is a merge to main's. A waiting run writes `main_push`; an entry without it was written by an
+ * action from before PR deploys could wait (v0.16.0 and earlier), where only merges to main ever waited, so it is one.
+ */
+function isMerge(entry) {
+  return entry.main_push !== false;
+}
+
+/**
+ * Whether the Slack bot has given this entry its turn: once dev frees up it tells the head of the queue (a `notify`
+ * entry) and holds dev for it until `claim_deadline`, so the deployer can re-run their job or `/dev lock`. A run waiting
+ * in line must not take dev during that window. A skip in progress (`skip_state`) means the turn is over.
+ */
+function hasTurn(entry, now) {
+  return entry.claim_deadline !== undefined && Number(entry.claim_deadline) >= now && entry.skip_state === undefined;
+}
+
+/**
  * All DynamoDB access for the dev lock.
  *
  * Lock expiry is decided here, in the conditions of the writes (`expires_at < now`), never by DynamoDB TTL:
@@ -86,7 +115,16 @@ export class LockStore {
 
   /** Return the runtime mode string, or null when CONFIG/mode has never been written. */
   async getMode() {
-    const { Item } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: CONFIG_KEY, ConsistentRead: true }));
+    return this.#getConfig(CONFIG_KEY);
+  }
+
+  /** Return the PR policy string, or null when CONFIG/pr_policy has never been written. */
+  async getPrPolicy() {
+    return this.#getConfig(PR_POLICY_KEY);
+  }
+
+  async #getConfig(key) {
+    const { Item } = await this.doc.send(new GetCommand({ TableName: this.tableName, Key: key, ConsistentRead: true }));
     return Item?.value ?? null;
   }
 
@@ -374,6 +412,37 @@ export class LockStore {
   }
 
   /**
+   * Count the other holders ahead of this one in the line. Only a run with nobody ahead of it tries to take a free lock.
+   *
+   * Merges to main go first: production waits on their dev job, so they are not made to wait behind PR deploys. Ahead
+   * of a merge are only merges that were waiting before it, and a turn the Slack bot has started (see hasTurn). Ahead
+   * of a PR deploy are every waiting merge, wherever it is in the queue, the PR deploys that were waiting before it, and
+   * a started turn. "Waiting" is a run waiting in its job right now (see isWaiting); "before" is an entry earlier than
+   * this holder's live entry, or any entry when it has none yet.
+   *
+   * It is a read, not part of the conditional write, so two runs that both see nobody ahead (a new arrival in the moment
+   * the head of the line takes the lock, say) still race, and the conditional write picks one.
+   */
+  async waitersAhead(settings) {
+    const now = this.now();
+    const live = await this.#liveQueue();
+    const { Item: claim } = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_CLAIM_PK, sk: settings.holderKey }, ConsistentRead: true }),
+    );
+    const mine = live.some((entry) => entry.sk === claim?.entry_sk && entry.holder_key === settings.holderKey) ? claim.entry_sk : null;
+    const ahead = new Set();
+    for (const entry of live) {
+      if (entry.holder_key === settings.holderKey) continue;
+      const before = mine === null || entry.sk < mine;
+      const counts = hasTurn(entry, now)
+        ? true
+        : isWaiting(entry, now) && (isMerge(entry) ? !settings.isMainPush || before : !settings.isMainPush && before);
+      if (counts) ahead.add(entry.holder_key);
+    }
+    return ahead.size;
+  }
+
+  /**
    * Add this holder to the queue, or refresh its entry. Returns its 1-based position.
    *
    * `notify`: a failed deploy asking to be pinged when dev is free (kept until it gets the lock or leaves).
@@ -506,7 +575,8 @@ export class LockStore {
       heartbeat_at: now,
       run_url: settings.runUrl,
       ttl: now + QUEUE_ENTRY_TTL_SECONDS,
-      ...(kind === "poll" ? { poll_seconds: settings.pollSeconds } : {}),
+      // Merges to main go ahead of waiting PR deploys (see waitersAhead), so a waiting run says which it is.
+      ...(kind === "poll" ? { poll_seconds: settings.pollSeconds, main_push: settings.isMainPush } : {}),
     };
     const once = { holder_key: settings.holderKey, repo: settings.repo, actor: settings.actor, ref: settings.ref, enqueued_at: now };
     if (settings.prUrl) once.pr_url = settings.prUrl;
@@ -665,10 +735,111 @@ export class LockStore {
     throw new Error("this deploy's poll queue share kept changing while trying to remove it");
   }
 
+  async #dropWaitingRun(holderKey, sk, runToken) {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_PK, sk },
+          UpdateExpression: "DELETE poll_run_ids :run",
+          ConditionExpression: "holder_key = :holder",
+          ExpressionAttributeValues: { ":run": new Set([runToken]), ":holder": holderKey },
+        }),
+      );
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error; // the entry is gone already
+    }
+  }
+
+  /**
+   * Stop this holder's `notify` entries from asking for a ping: for a report-only run that gave up waiting on one (a
+   * re-run after an enforce-era block) and deploys anyway, so the bot does not ping "your turn" for it later.
+   *
+   * An entry no run is waiting on is removed, with the claim naming it. An entry that still has other runs' tokens
+   * becomes an ordinary `poll` entry instead, and its started turn is cancelled: which of those tokens are alive cannot
+   * be told (the heartbeat is shared, and this run refreshed it last), so the entry is not kept as a ping either way. A
+   * live sibling keeps waiting in the same place, and an enforce sibling that gives up writes `notify` again. A dead
+   * one's entry goes stale once nobody refreshes it and drops out of the line by itself.
+   *
+   * Each write is conditional on what decides it (still `notify`, no tokens or some), so a sibling that joins or leaves
+   * in between sends it down the other branch on the next pass; not a transaction, so a sibling that queues between the
+   * entry and claim deletes finds the entry gone and takes a new one, and the claim is only removed while it names it.
+   */
+  async retireNotify(holderKey) {
+    for (const entry of await this.#queue()) {
+      if (entry.holder_key !== holderKey || entry.kind !== "notify") continue;
+      for (let attempt = 0; attempt <= MAX_QUEUE_RETRIES; attempt += 1) {
+        if (await this.#deleteUnwatchedNotify(holderKey, entry.sk)) break;
+        if (await this.#notifyToPoll(holderKey, entry.sk)) break;
+        const { Item: current } = await this.doc.send(
+          new GetCommand({ TableName: this.tableName, Key: { pk: QUEUE_PK, sk: entry.sk }, ConsistentRead: true }),
+        );
+        if (!current || current.holder_key !== holderKey || current.kind !== "notify") break;
+      }
+    }
+  }
+
+  async #deleteUnwatchedNotify(holderKey, sk) {
+    try {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_PK, sk },
+          ConditionExpression: "holder_key = :holder AND #kind = :notify AND (attribute_not_exists(poll_run_ids) OR size(poll_run_ids) = :zero)",
+          ExpressionAttributeNames: { "#kind": "kind" },
+          ExpressionAttributeValues: { ":holder": holderKey, ":notify": "notify", ":zero": 0 },
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailure(error)) return false;
+      throw error;
+    }
+    try {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_CLAIM_PK, sk: holderKey },
+          ConditionExpression: "entry_sk = :sk",
+          ExpressionAttributeValues: { ":sk": sk },
+        }),
+      );
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+    }
+    return true;
+  }
+
+  async #notifyToPoll(holderKey, sk) {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: QUEUE_PK, sk },
+          UpdateExpression: "SET #kind = :poll REMOVE #claim_deadline",
+          ConditionExpression: "holder_key = :holder AND #kind = :notify AND size(poll_run_ids) > :zero",
+          ExpressionAttributeNames: { "#kind": "kind", "#claim_deadline": "claim_deadline" },
+          ExpressionAttributeValues: { ":holder": holderKey, ":notify": "notify", ":poll": "poll", ":zero": 0 },
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailure(error)) return false;
+      throw error;
+    }
+    return true;
+  }
+
   /** Remove a holder's queue entries of the given kinds, and its claim when that named one of them. */
   async removeQueueEntries(holderKey, kinds = ["notify", "poll"], runToken = null) {
     for (const entry of await this.#queue()) {
-      if (entry.holder_key !== holderKey || !kinds.includes(entry.kind)) continue;
+      if (entry.holder_key !== holderKey) continue;
+      if (!kinds.includes(entry.kind)) {
+        // A run that waited on its holder's `notify` entry left its token there (a `poll` write keeps the kind): take
+        // the token out, so the entry stops counting as waiting, but keep the entry and its ping.
+        if (runToken !== null && entry.kind === "notify" && entry.poll_run_ids instanceof Set && entry.poll_run_ids.has(runToken)) {
+          await this.#dropWaitingRun(holderKey, entry.sk, runToken);
+        }
+        continue;
+      }
       if (runToken !== null && entry.kind === "poll") {
         await this.#removePollShare(holderKey, entry, runToken);
         continue;

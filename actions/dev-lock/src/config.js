@@ -6,6 +6,7 @@ export const DEFAULTS = Object.freeze({
   region: "us-east-1",
   ttlMinutes: 60,
   waitMinutes: 30,
+  prWaitMinutes: 30,
   pollSeconds: 15,
 });
 
@@ -71,6 +72,7 @@ export class Settings {
       region: input(env, "AWS_REGION", env.AWS_REGION || env.AWS_DEFAULT_REGION || DEFAULTS.region),
       ttlSeconds: integer(input(env, "TTL_MINUTES", String(DEFAULTS.ttlMinutes)), "ttl_minutes", 1) * 60,
       waitSeconds: integer(input(env, "WAIT_MINUTES", String(DEFAULTS.waitMinutes)), "wait_minutes", 0) * 60,
+      prWaitSeconds: integer(input(env, "PR_WAIT_MINUTES", String(DEFAULTS.prWaitMinutes)), "pr_wait_minutes", 0) * 60,
       pollSeconds: integer(input(env, "POLL_SECONDS", String(DEFAULTS.pollSeconds)), "poll_seconds", 1),
       repo: required(env, "GITHUB_REPOSITORY"),
       actor: required(env, "GITHUB_ACTOR"),
@@ -95,6 +97,11 @@ export class Settings {
   /** A merge to main. Its dev deploy gates the production deploy, so it is treated differently. */
   get isMainPush() {
     return this.eventName === "push" && this.ref === "refs/heads/main";
+  }
+
+  /** How long this run waits in line: a merge to main has its own limit, every other deploy has the PR one. */
+  get waitLimitSeconds() {
+    return this.isMainPush ? this.waitSeconds : this.prWaitSeconds;
   }
 
   /** Link to this workflow run, shown to people who are told about it. */

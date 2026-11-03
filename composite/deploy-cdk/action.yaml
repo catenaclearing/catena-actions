@@ -8,7 +8,9 @@ description: >-
   name. The deploy then stamps that tag so ownership is always recorded.
   In the development account, deploys of the repos in dev_lock_repos also take
   the global dev lock first (actions/dev-lock, PLAT-473), so two deploys don't
-  overwrite each other. Every other deploy is unaffected.
+  overwrite each other. Those deploys synthesize the app and publish its assets
+  before taking the lock, so a deploy waiting for dev only has to deploy once it
+  gets it. Every other deploy is unaffected.
 
 inputs:
   role_to_assume:
@@ -136,6 +138,71 @@ runs:
         DEV_LOCK_REPOS: ${{ inputs.dev_lock_repos }}
         DEV_LOCK_ACCOUNT_ID: ${{ inputs.dev_lock_account_id }}
 
+    # The ownership guard once before building too (PLAT-590), so nothing is published for a stack another repo owns.
+    # continue-on-error like the build: when it fails, the build is skipped and the guard before "CDK Deploy" (which
+    # still runs, and still catches a stack that changed owner while this job waited) stops the deploy as it always did.
+    - name: Check stack ownership before building
+      id: early-guard
+      if: steps.dev-lock-gate.outputs.is_dev_lock == 'true'
+      continue-on-error: true
+      shell: bash
+      run: '"$ACTION_PATH/stack-ownership-guard.sh"'
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        STACK_NAME: ${{ inputs.stack_name }}
+        THIS_REPO: ${{ github.repository }}
+        ENFORCE_OWNERSHIP_TAG: ${{ inputs.enforce_ownership_tag }}
+
+    # Build before the lock (PLAT-590): synthesize the app and publish the stack's assets (Docker images, files) while dev
+    # may still be busy, so a deploy that waits for the lock has nothing left to build once it gets it. It writes only
+    # to the bootstrap bucket and repositories, never to the stack. Only deploys that take the lock do this; every other
+    # deploy runs the single `cdk deploy` it always did. continue-on-error, as for the lock: if anything here fails, the
+    # assembly is not handed on and "CDK Deploy" synthesizes and builds everything itself, so this step can never turn
+    # a deploy that would have worked into a failed one.
+    - name: Build and publish the CDK assets before taking the dev lock
+      id: prebuild
+      if: steps.dev-lock-gate.outputs.is_dev_lock == 'true' && steps.early-guard.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -eo pipefail
+        cd "$DIRECTORY"
+        source .venv/bin/activate
+        # `cdk publish-assets` arrived in CDK CLI 2.1116.0. An older pinned cdk_version builds after the lock, as before.
+        VERSION="$(npx -y "aws-cdk@$CDK_VERSION" --version | awk '{print $1}')"
+        if [ "$(printf '%s\n' 2.1116.0 "$VERSION" | sort -V | head -n 1)" != "2.1116.0" ]; then
+          echo "::notice::CDK CLI $VERSION has no publish-assets (2.1116.0 or later); building after taking the dev lock."
+          exit 0
+        fi
+        if ! [[ "$ASSET_BUILD_CONCURRENCY" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::warning::asset_build_concurrency must be a positive integer, got '$ASSET_BUILD_CONCURRENCY'."
+          exit 1
+        fi
+        EXCLUSIVELY=()
+        if [ "$EXCLUSIVELY_FLAG" = "true" ]; then
+          EXCLUSIVELY=(--exclusively)
+        fi
+        # A fresh directory of its own, named without stack_name: an input like "../../x" must never steer a path here.
+        # "CDK Deploy" gets it from this step's output, so a job that deploys several stacks keeps them apart.
+        mkdir -p "$RUNNER_TEMP"
+        ASSEMBLY="$(mktemp -d "$RUNNER_TEMP/deploy-cdk-assembly.XXXXXX")"
+        npx -y "aws-cdk@$VERSION" synth "$STACK_NAME" "${EXCLUSIVELY[@]}" --quiet --output "$ASSEMBLY"
+        # Only this stack's assets (and its dependencies' unless exclusively): the app also has stacks for other
+        # accounts, which these credentials cannot publish to. --concurrency bounds builds as --asset-build-concurrency does.
+        npx -y "aws-cdk@$VERSION" publish-assets "$STACK_NAME" "${EXCLUSIVELY[@]}" --app "$ASSEMBLY" \
+          --unstable=publish-assets --concurrency "$ASSET_BUILD_CONCURRENCY"
+        # Handed on only once everything above worked.
+        echo "assembly=$ASSEMBLY" >> "$GITHUB_OUTPUT"
+      env:
+        GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
+        DOCKER_BUILDKIT: 1
+        BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+        DIRECTORY: ${{ inputs.directory }}
+        CDK_VERSION: ${{ inputs.cdk_version }}
+        STACK_NAME: ${{ inputs.stack_name }}
+        EXCLUSIVELY_FLAG: ${{ inputs.exclusively }}
+        ASSET_BUILD_CONCURRENCY: ${{ inputs.asset_build_concurrency }}
+
     - name: Take the dev environment lock
       id: dev-lock
       if: steps.dev-lock-gate.outputs.is_dev_lock == 'true'
@@ -157,53 +224,9 @@ runs:
 
     - name: Guard against overwriting another service's stack
       shell: bash
-      run: |
-        set -euo pipefail
-        # Ownership is tracked by a stack-level tag that the CDK Deploy step below
-        # stamps on every deploy. We read it back here and compare it to this repo.
-        # The tag VALUE is the repo, which is unique per service, so this works even
-        # though all services are generated from the same template and therefore have
-        # near-identical resource names (which is why comparing resources or diffs
-        # would not tell two services apart).
-        OWNER_TAG="catena:managed-by"
-        # describe-stacks fails if the stack doesn't exist (safe to create) but ALSO on
-        # real errors (AccessDenied, throttling, wrong region). Tell them apart: treating
-        # every failure as "no stack" would silently disable this guard on a transient
-        # error, so fail closed on anything other than a genuine "does not exist".
-        ERR_FILE="${RUNNER_TEMP:-/tmp}/deploy-cdk-guard-err.txt"
-        if ! OWNER=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Tags[?Key=='$OWNER_TAG'].Value | [0]" --output text 2>"$ERR_FILE"); then
-          if grep -q "does not exist" "$ERR_FILE"; then
-            echo "Stack '$STACK_NAME' does not exist yet. Safe to create."
-            exit 0
-          fi
-          echo "::error::Could not check ownership of stack '$STACK_NAME'; refusing to deploy blindly."
-          cat "$ERR_FILE" >&2
-          exit 1
-        fi
-        # AWS CLI prints the literal "None" when the stack exists but has no such tag.
-        if [ "$OWNER" = "None" ]; then OWNER=""; fi
-        if [ -z "$OWNER" ]; then
-          if [ "$ENFORCE_OWNERSHIP_TAG" = "true" ]; then
-            MSG="Stack '$STACK_NAME' exists but has no '$OWNER_TAG' tag; owner cannot be confirmed."
-            MSG="$MSG enforce_ownership_tag is on. Backfill the tag on the stack, then retry."
-            echo "::error::$MSG"
-            exit 1
-          fi
-          MSG="Stack '$STACK_NAME' exists but has no '$OWNER_TAG' tag (legacy stack)."
-          MSG="$MSG Cannot confirm owner; proceeding. This deploy will stamp it with '$THIS_REPO'."
-          echo "::warning::$MSG"
-          exit 0
-        fi
-        if [ "$OWNER" != "$THIS_REPO" ]; then
-          MSG="Stack '$STACK_NAME' already exists and is managed by '$OWNER'."
-          MSG="$MSG This deploy is from '$THIS_REPO' - refusing to overwrite another service's stack."
-          MSG="$MSG Use a unique stack name in app.py and deploy.yaml."
-          echo "::error::$MSG"
-          exit 1
-        fi
-        echo "Stack '$STACK_NAME' is managed by '$OWNER' (this repo). Safe to update."
+      run: '"$ACTION_PATH/stack-ownership-guard.sh"'
       env:
+        ACTION_PATH: ${{ github.action_path }}
         STACK_NAME: ${{ inputs.stack_name }}
         THIS_REPO: ${{ github.repository }}
         ENFORCE_OWNERSHIP_TAG: ${{ inputs.enforce_ownership_tag }}
@@ -227,8 +250,19 @@ runs:
           fi
           ASSET_BUILD_CONCURRENCY_ARGS=(--asset-build-concurrency "$ASSET_BUILD_CONCURRENCY")
         fi
-        npx -y "aws-cdk@$CDK_VERSION" deploy "$STACK_NAME" \
-          --force --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY "${ASSET_BUILD_CONCURRENCY_ARGS[@]}"
+        # Deploy the assembly built before the lock when there is one, so the deploy is the code this job built, however
+        # long it waited. Its assets are already published, and CDK skips published assets only without --force (with it,
+        # `cdk deploy` rebuilds and re-pushes every one), so that path leaves --force out. CDK still deploys whenever the
+        # template, tags or parameters differ, so a stack without the catena:managed-by tag still gets it; only a deploy
+        # that would change nothing is skipped. Otherwise synthesize and build here, with --force as always.
+        APP_ARGS=()
+        FORCE_ARGS=(--force)
+        if [ -n "$PREBUILT_ASSEMBLY" ]; then
+          APP_ARGS=(--app "$PREBUILT_ASSEMBLY")
+          FORCE_ARGS=()
+        fi
+        npx -y "aws-cdk@$CDK_VERSION" deploy "$STACK_NAME" "${APP_ARGS[@]}" \
+          "${FORCE_ARGS[@]}" --tags "catena:managed-by=$THIS_REPO" $EXCLUSIVELY "${ASSET_BUILD_CONCURRENCY_ARGS[@]}"
       env:
         GITHUB_TOKEN: ${{ inputs.machine_user_pat }}
         DOCKER_BUILDKIT: 1
@@ -239,3 +273,4 @@ runs:
         THIS_REPO: ${{ github.repository }}
         EXCLUSIVELY_FLAG: ${{ inputs.exclusively }}
         ASSET_BUILD_CONCURRENCY: ${{ inputs.asset_build_concurrency }}
+        PREBUILT_ASSEMBLY: ${{ steps.prebuild.outputs.assembly }}
