@@ -1,3 +1,9 @@
+## 0.18.0 (2026-11-03)
+
+### Feat
+
+- **PLAT-590**: let blocked PR dev deploys wait in line, building before the lock (#105)
+
 ## 0.17.0 (2026-10-26)
 
 ### Feat
