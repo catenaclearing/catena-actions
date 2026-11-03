@@ -76,6 +76,15 @@ function isWaiting(entry, now) {
 }
 
 /**
+ * Whether the Slack bot has given this entry its turn: once dev frees up it tells the head of the queue (a `notify`
+ * entry) and holds dev for it until `claim_deadline`, so the deployer can re-run their job or `/dev lock`. A run waiting
+ * in line must not take dev during that window. A skip in progress (`skip_state`) means the turn is over.
+ */
+function hasTurn(entry, now) {
+  return entry.claim_deadline !== undefined && Number(entry.claim_deadline) >= now && entry.skip_state === undefined;
+}
+
+/**
  * All DynamoDB access for the dev lock.
  *
  * Lock expiry is decided here, in the conditions of the writes (`expires_at < now`), never by DynamoDB TTL:
@@ -395,8 +404,9 @@ export class LockStore {
   }
 
   /**
-   * Count the other holders waiting in line ahead of this one: holders with a waiting run (see isWaiting) whose entry
-   * comes before this holder's live entry, or every one of them when this holder has no live entry yet.
+   * Count the other holders waiting in line ahead of this one: holders with a waiting run (see isWaiting), or whose turn
+   * the Slack bot has started (see hasTurn), whose entry comes before this holder's live entry, or every one of them when
+   * this holder has no live entry yet.
    *
    * This is what makes the lock first in, first out: only a run with nobody ahead of it tries to take a free lock. It is
    * a read, not part of the conditional write, so two runs that both see nobody ahead (a new arrival in the moment the
@@ -412,7 +422,7 @@ export class LockStore {
     const ahead = new Set();
     for (const entry of live) {
       if (mine !== null && entry.sk >= mine) break;
-      if (entry.holder_key !== settings.holderKey && isWaiting(entry, now)) ahead.add(entry.holder_key);
+      if (entry.holder_key !== settings.holderKey && (isWaiting(entry, now) || hasTurn(entry, now))) ahead.add(entry.holder_key);
     }
     return ahead.size;
   }

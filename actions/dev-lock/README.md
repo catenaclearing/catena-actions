@@ -66,6 +66,8 @@ queue is ordered by when each holder joined) that a run is waiting on right now:
   can last hours and production must not wait on it (the PRs in line keep waiting, now for the merge);
 * a `notify` entry nobody is waiting on (a deploy that failed fast) holds nobody up. If that person re-runs the job and
   it waits, it keeps the entry and so its original place;
+* except during its turn: once the Slack bot has told that person it is their turn (`claim_deadline` set, not yet
+  past, no skip in progress), runs behind them wait until they claim dev or the window runs out;
 * a run whose runner died stops counting once its entry goes stale, and a cancelled one leaves the line in its post step;
 * a sibling run of the holder that has dev joins it, whoever is in line.
 

@@ -362,6 +362,36 @@ describe("first in, first out", () => {
     assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
   });
 
+  it("a run waiting in line does not take dev during the turn the Slack bot gave someone ahead of it", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    await setPrPolicy(ctx, "wait");
+    const sk = await queued(ctx, CAROL, { kind: "notify", runs: [] }); // failed fast earlier, nobody waiting in a job
+    await ctx.put({ ...(await ctx.queueItems()).find((item) => item.sk === sk), claim_deadline: START + 30 }); // "your turn, carol"
+    const { settings, store } = ctx.make();
+
+    assert.equal(await acquire(settings, store, ctx.clock, ctx.out), 0);
+
+    assert.ok(ctx.clock.slept.reduce((a, b) => a + b, 0) > 30); // waited out carol's window
+    assert.equal((await ctx.currentLock()).holder_key, settings.holderKey);
+    assert.match(text(ctx.out), /Dev is free, but 1 deploy is waiting in line ahead of this one/);
+  });
+
+  it("a turn that ran out, or is being skipped, holds nobody up", async () => {
+    const ctx = await lab.fresh();
+    await ctx.setMode("enforce");
+    for (const [holder, extra] of [
+      [CAROL, { claim_deadline: START - 1 }],
+      [DAVE, { claim_deadline: START + 300, skip_state: "announcing" }],
+    ]) {
+      const sk = await queued(ctx, holder, { kind: "notify", runs: [] });
+      await ctx.put({ ...(await ctx.queueItems()).find((item) => item.sk === sk), ...extra });
+    }
+    const { settings, store } = ctx.make();
+
+    assert.equal(await store.waitersAhead(settings), 0);
+  });
+
   it("a notified deployer who re-runs and waits keeps their place", async () => {
     const ctx = await lab.fresh();
     await ctx.setMode("enforce");
