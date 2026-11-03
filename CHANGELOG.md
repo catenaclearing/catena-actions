@@ -1,3 +1,10 @@
+## 0.18.1 (2026-11-03)
+
+### Fix
+
+- **PLAT-590**: pin deploy-cdk's dev-lock step to the v0.18.0 release (#106)
+- **PLAT-590**: pin deploy-cdk's dev-lock step to the v0.18.0 release, which waits in line
+
 ## 0.18.0 (2026-11-03)
 
 ### Feat
