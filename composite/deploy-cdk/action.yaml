@@ -207,9 +207,9 @@ runs:
       id: dev-lock
       if: steps.dev-lock-gate.outputs.is_dev_lock == 'true'
       continue-on-error: true
-      # Pinned to the release that contains this action (v0.16.0), so job setup never waits on the v0 tag moving. Bump it
+      # Pinned to the release that contains this action (v0.18.0), so job setup never waits on the v0 tag moving. Bump it
       # to a later release commit on main when the action changes; never to a branch commit, which can disappear.
-      uses: catenaclearing/catena-actions/actions/dev-lock@6aec297a1f3e38103322acbf973c355d8a80bc09
+      uses: catenaclearing/catena-actions/actions/dev-lock@4b4c87221e8243cc1a57f4de5cca10f4968a317b
       with:
         aws_region: ${{ inputs.aws_region }}
 
