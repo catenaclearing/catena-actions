@@ -28,7 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # The checked-out copy, so a PR's dev deploy runs that PR's version of the action rather than main's.
+      # The checked-out copy, so a PR's dev deploy runs that PR's deploy-cdk rather than main's. The actions it calls
+      # (setup-python, dev-lock) still come from their own refs, and this stack only exercises the Python path.
       - name: Deploy CDK Stack
         uses: ./composite/deploy-cdk
         with:

@@ -125,6 +125,9 @@ runs:
       with:
         node-version: 24
         cache: pnpm
+        # Any lockfile in the repo, so the cache works whether the CDK app is a workspace package (root lockfile) or a
+        # pnpm project of its own (lockfile in directory). On its own, setup-node only looks at the root.
+        cache-dependency-path: "**/pnpm-lock.yaml"
 
     # The same access setup-python gives Python apps: ghcr.io base images and private GitHub dependencies.
     - name: Log in to the GitHub Container registry

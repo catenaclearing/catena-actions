@@ -66,7 +66,7 @@ Instead of the Python environment, the action sets up pnpm and Node 24 and runs 
 `directory`. Your repo needs:
 
 - a `packageManager` field (for example `"pnpm@12.5.1"`) in the root `package.json`, which sets the pnpm version
-- a `pnpm-lock.yaml`, and `directory` inside the pnpm project or workspace it belongs to
+- a `pnpm-lock.yaml` for the pnpm project `directory` belongs to: at the root for a workspace package, or in `directory` for a pnpm project of its own
 
 `machine_user_pat` is passed as `NODE_AUTH_TOKEN` to the install and to `cdk deploy`. The install uses it for private
 `@catenaclearing` packages. A Docker image asset can read it as a build secret, for example

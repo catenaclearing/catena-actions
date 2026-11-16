@@ -128,6 +128,7 @@ def test_setup_node_leaves_no_placeholder_token_for_the_rest_of_the_job():
     """registry-url makes setup-node write NODE_AUTH_TOKEN=XXXXX-... to GITHUB_ENV, which beats a caller's job env."""
     node = step("Set up Node.js with pnpm")["with"]
     assert node["cache"] == "pnpm"
+    assert node["cache-dependency-path"] == "**/pnpm-lock.yaml"  # not just the root, where setup-node looks by default
     assert "registry-url" not in node
 
 
