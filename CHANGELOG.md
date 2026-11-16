@@ -1,3 +1,9 @@
+## 0.19.0 (2026-11-16)
+
+### Feat
+
+- **FE-1016**: let deploy-cdk deploy TypeScript CDK apps (#107)
+
 ## 0.18.1 (2026-11-03)
 
 ### Fix
