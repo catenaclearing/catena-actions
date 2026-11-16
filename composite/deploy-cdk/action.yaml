@@ -40,9 +40,20 @@ inputs:
     default: docker-container
 
   directory:
-    description: Directory to set up the Python environment and deploy the CDK app.
+    description: >-
+      Directory of the CDK app (the one with cdk.json). Python projects set up their environment here; TypeScript
+      projects install their pnpm workspace from here.
     required: false
     default: .
+
+  language:
+    description: >-
+      Language of the CDK app, "python" or "typescript". "typescript" sets up pnpm (the version in the caller's
+      package.json "packageManager") and Node instead of Python, installs the workspace with a frozen lockfile, and
+      passes machine_user_pat to the deploy as NODE_AUTH_TOKEN for private @catenaclearing packages and Docker build
+      secrets.
+    required: false
+    default: python
 
   exclusively:
     description: Deploy only the specified stack, without its dependencies.
@@ -87,7 +98,76 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Check the language input
+      shell: bash
+      run: |
+        case "$LANGUAGE" in
+          python | typescript) ;;
+          *)
+            echo "::error::language must be \"python\" or \"typescript\", got '$LANGUAGE'."
+            exit 1
+            ;;
+        esac
+      env:
+        LANGUAGE: ${{ inputs.language }}
+
+    - name: Set up pnpm
+      if: inputs.language == 'typescript'
+      # No version: it reads the caller's package.json "packageManager". v6.1.0 is the first release that installs
+      # pnpm 12, and the moving v6 tag predates it.
+      uses: pnpm/action-setup@v6.1.0
+
+    # No registry-url: setup-node would write a placeholder NODE_AUTH_TOKEN to GITHUB_ENV for the rest of the caller's
+    # job. The install step below sets up the private registry for itself.
+    - name: Set up Node.js with pnpm
+      if: inputs.language == 'typescript'
+      uses: actions/setup-node@v6
+      with:
+        node-version: 24
+        cache: pnpm
+        # Any lockfile in the repo, so the cache works whether the CDK app is a workspace package (root lockfile) or a
+        # pnpm project of its own (lockfile in directory). On its own, setup-node only looks at the root.
+        cache-dependency-path: "**/pnpm-lock.yaml"
+
+    # The same access setup-python gives Python apps: ghcr.io base images and private GitHub dependencies.
+    - name: Log in to the GitHub Container registry
+      if: inputs.language == 'typescript'
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.machine_user_pat }}
+
+    - name: Configure git PAT to access our private repositories
+      if: inputs.language == 'typescript'
+      shell: bash
+      env:
+        MACHINE_USER_PAT: ${{ inputs.machine_user_pat }}
+      run: |
+        # Keep the PAT out of the URL: newer curl strips credentials from the effective URL,
+        # git mistakes that for a redirect and drops them. A credential helper survives it.
+        echo "::add-mask::$MACHINE_USER_PAT"
+        git config --global credential.https://github.com.helper store
+        printf 'protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\n\n' "$MACHINE_USER_PAT" \
+          | git credential approve
+
+    # pnpm installs the whole workspace from inside any of its packages. The npmrc holds a reference to the token, never
+    # the token itself, and only this step reads it.
+    - name: Install Node dependencies
+      if: inputs.language == 'typescript'
+      shell: bash
+      working-directory: ${{ inputs.directory }}
+      run: |
+        printf '%s\n' '@catenaclearing:registry=https://npm.pkg.github.com' \
+          '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+        pnpm install --frozen-lockfile
+      env:
+        HUSKY: "0"
+        NODE_AUTH_TOKEN: ${{ inputs.machine_user_pat }}
+        NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/deploy-cdk.npmrc
+
     - name: Set Up Environment and load Cached Dependencies
+      if: inputs.language == 'python'
       uses: catenaclearing/catena-actions/composite/setup-python@v0
       with:
         machine_user_pat: ${{ inputs.machine_user_pat }}
@@ -110,6 +190,7 @@ runs:
         key: npm-cdk-${{ runner.os }}-${{ inputs.cdk_version }}
 
     - name: Setup Node.js
+      if: inputs.language == 'python'
       uses: actions/setup-node@v6
       with:
         node-version: 24
@@ -167,7 +248,12 @@ runs:
       run: |
         set -eo pipefail
         cd "$DIRECTORY"
-        source .venv/bin/activate
+        if [ "$LANGUAGE" = "python" ]; then
+          source .venv/bin/activate
+        else
+          # Docker image assets read it as a build secret. Python deploys keep whatever NODE_AUTH_TOKEN they had.
+          export NODE_AUTH_TOKEN="$GITHUB_TOKEN"
+        fi
         # `cdk publish-assets` arrived in CDK CLI 2.1116.0. An older pinned cdk_version builds after the lock, as before.
         VERSION="$(npx -y "aws-cdk@$CDK_VERSION" --version | awk '{print $1}')"
         if [ "$(printf '%s\n' 2.1116.0 "$VERSION" | sort -V | head -n 1)" != "2.1116.0" ]; then
@@ -202,6 +288,7 @@ runs:
         STACK_NAME: ${{ inputs.stack_name }}
         EXCLUSIVELY_FLAG: ${{ inputs.exclusively }}
         ASSET_BUILD_CONCURRENCY: ${{ inputs.asset_build_concurrency }}
+        LANGUAGE: ${{ inputs.language }}
 
     - name: Take the dev environment lock
       id: dev-lock
@@ -235,7 +322,12 @@ runs:
       shell: bash
       run: |
         cd "$DIRECTORY"
-        source .venv/bin/activate
+        if [ "$LANGUAGE" = "python" ]; then
+          source .venv/bin/activate
+        else
+          # Docker image assets read it as a build secret. Python deploys keep whatever NODE_AUTH_TOKEN they had.
+          export NODE_AUTH_TOKEN="$GITHUB_TOKEN"
+        fi
         EXCLUSIVELY=""
         if [ "$EXCLUSIVELY_FLAG" = "true" ]; then
           EXCLUSIVELY="--exclusively"
@@ -274,3 +366,4 @@ runs:
         EXCLUSIVELY_FLAG: ${{ inputs.exclusively }}
         ASSET_BUILD_CONCURRENCY: ${{ inputs.asset_build_concurrency }}
         PREBUILT_ASSEMBLY: ${{ steps.prebuild.outputs.assembly }}
+        LANGUAGE: ${{ inputs.language }}
